@@ -16,27 +16,87 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== SIDEBAR FOR API KEYS ==========
+# ========== LIGHT BLUE THEME CSS ==========
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(135deg, #e0f0ff 0%, #b8d9ff 100%);
+        color: #1a2a3a;
+    }
+    .main-title {
+        text-align: center;
+        margin-bottom: 1rem;
+        position: relative;
+    }
+    .main-title h1 {
+        color: #1e3c72;
+    }
+    .main-title p {
+        color: #2a4a7a;
+    }
+    .stButton>button {
+        background-color: #2c7be5;
+        color: white;
+        border-radius: 30px;
+        font-weight: bold;
+        width: 100%;
+    }
+    .stButton>button:hover {
+        background-color: #1a5bbf;
+    }
+    .security-badge {
+        background: white;
+        border: 1px solid #2c7be5;
+        border-radius: 30px;
+        padding: 8px 15px;
+        margin: 10px 0;
+        text-align: center;
+        color: #1e3c72;
+        font-weight: bold;
+        font-family: monospace;
+        word-break: break-all;
+    }
+    .chat-message {
+        background: rgba(255,255,255,0.7);
+        border-radius: 15px;
+        padding: 10px;
+        margin: 5px 0;
+        color: #1a2a3a;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #cce4ff !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ========== LOAD API KEYS FROM STREAMLIT SECRETS ==========
+def get_secret(key, default=""):
+    try:
+        return st.secrets[key]
+    except:
+        return default
+
+GROK_API_KEY = get_secret("GROK_API_KEY")
+PEXELS_API_KEY = get_secret("PEXELS_API_KEY")
+YOUTUBE_API_KEY = get_secret("YOUTUBE_API_KEY", "")
+TIKTOK_ACCESS_TOKEN = get_secret("TIKTOK_ACCESS_TOKEN", "")
+INSTAGRAM_TOKEN = get_secret("INSTAGRAM_TOKEN", "")
+
+# ========== SIDEBAR INFO ==========
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/null/youtube-play.png", width=80)
     st.markdown("## **Faceless Video Automator**")
     st.markdown("Powered by **Grok AI (xAI)**")
     st.markdown("---")
-    
-    grok_api_key = st.text_input("Grok API Key (xAI)", type="password")
-    pexels_api_key = st.text_input("Pexels API Key (optional for stock clips)", type="password")
-    
+    st.markdown("### 🛡️ Global Security Shield")
+    st.markdown(f'<div class="security-badge">🔐 Secure API connection active</div>', unsafe_allow_html=True)
     st.markdown("---")
-    st.markdown("**Social Media APIs (optional)**")
-    youtube_api_key = st.text_input("YouTube API Key", type="password")
-    tiktok_access_token = st.text_input("TikTok Access Token", type="password")
-    instagram_token = st.text_input("Instagram Graph API Token", type="password")
-    
-    st.markdown("---")
-    st.markdown("Built by **Gesner Deslandes**")
+    st.markdown("Built by **Gesner Deslandes**, Engineer-in-Chief")
     st.markdown("📞 (509) 4738 5663")
     st.markdown("✉️ deslandes78@gmail.com")
     st.markdown("🌐 [GlobalInternet.py](https://globalinternetsitepy-abh7v6tnmskxxnuplrdcgk.streamlit.app/)")
+    st.markdown("---")
+    st.caption("© 2026 GlobalInternet.py")
 
 # ========== MAIN INTERFACE ==========
 st.title("🎬 Faceless Video Automator with Grok AI")
@@ -44,21 +104,21 @@ st.markdown("Generate and auto-post faceless videos daily using AI.")
 
 niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
-auto_post = st.checkbox("Auto‑post to social media (requires API keys)")
+auto_post = st.checkbox("Auto‑post to social media (requires OAuth credentials)")
 
 if st.button("🚀 Generate & Post Video", use_container_width=True):
-    if not grok_api_key:
-        st.error("Please enter your Grok API key in the sidebar.")
+    if not GROK_API_KEY:
+        st.error("Grok API key not found in Streamlit secrets. Please add GROK_API_KEY.")
     else:
         with st.spinner("Generating script using Grok AI..."):
             # 1. Generate script using Grok API
             headers = {
-                "Authorization": f"Bearer {grok_api_key}",
+                "Authorization": f"Bearer {GROK_API_KEY}",
                 "Content-Type": "application/json"
             }
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
-                "model": "grok-1",  # adjust if Grok has specific model name
+                "model": "grok-1",  # Adjust if Grok uses a different model name
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -85,10 +145,9 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
         
         # 3. Fetch stock clips from Pexels (if API key provided)
         video_clips = []
-        if pexels_api_key:
+        if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
-                headers_pex = {"Authorization": pexels_api_key}
-                # Extract keywords from script (simple: first few words)
+                headers_pex = {"Authorization": PEXELS_API_KEY}
                 keywords = niche.split()[:3]
                 search_term = " ".join(keywords)
                 url = f"https://api.pexels.com/videos/search?query={search_term}&per_page=3"
@@ -101,7 +160,6 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
                             if video_files:
                                 clip_url = video_files[0]["link"]
                                 clip_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                                # Download clip
                                 clip_resp = requests.get(clip_url, stream=True)
                                 with open(clip_path, "wb") as f:
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
@@ -112,7 +170,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
                 except:
                     st.warning("Could not fetch stock clips. Using fallback.")
             if not video_clips:
-                video_clips = [None]  # fallback
+                video_clips = [None]
         else:
             video_clips = [None]
         
@@ -120,11 +178,9 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
         with st.spinner("Assembling final video..."):
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
-            # Create a clip list
             clips = []
             for i, clip_path in enumerate(video_clips):
                 if clip_path is None:
-                    # Fallback: black screen with text
                     txt_clip = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
                     txt_clip = txt_clip.set_duration(duration/len(video_clips) if len(video_clips)>0 else duration).set_position('center')
                     bg_clip = ColorClip(size=(640,480), color=(0,0,0), duration=duration/len(video_clips) if len(video_clips)>0 else duration)
@@ -140,18 +196,17 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
             st.success("Video assembled successfully!")
             st.video(output_video)
         
-        # 5. Auto-post to social media (if requested and keys provided)
+        # 5. Auto-post to social media (requires OAuth – placeholder)
         if auto_post:
             posted = False
-            if youtube_api_key:
-                # YouTube upload would require OAuth, not just API key – simplified for hackathon
-                st.info("YouTube auto-upload would require OAuth credentials. Implement separately.")
-            if tiktok_access_token:
-                st.info("TikTok upload would require API integration. Implement separately.")
-            if instagram_token:
-                st.info("Instagram Graph API upload requires further setup.")
+            if YOUTUBE_API_KEY:
+                st.info("YouTube auto-upload requires OAuth 2.0 credentials (Client ID & Secret). Set up OAuth in your app.")
+            if TIKTOK_ACCESS_TOKEN:
+                st.info("TikTok upload requires additional OAuth setup. Not implemented in this demo.")
+            if INSTAGRAM_TOKEN:
+                st.info("Instagram upload requires Graph API setup. Not implemented in this demo.")
             if not posted:
-                st.warning("Auto‑posting not fully implemented in this demo. Please add OAuth credentials.")
+                st.warning("Auto‑posting not fully implemented. You can download the video manually.")
         else:
             st.info("Auto‑posting disabled. You can download the video manually.")
         
