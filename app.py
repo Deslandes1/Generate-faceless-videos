@@ -5,6 +5,14 @@ import asyncio
 import edge_tts
 from moviepy.editor import *
 from datetime import datetime
+import os
+import pickle
+import google.auth
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow, InstalledAppFlow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -20,16 +28,16 @@ st.markdown("""
         background: linear-gradient(135deg, #e0f0ff 0%, #b8d9ff 100%);
         color: #1a2a3a;
     }
-    .main-title {
-        text-align: center;
-        margin-bottom: 1rem;
-        position: relative;
-    }
-    .main-title h1 {
+    .big-title {
+        font-size: 3rem;
+        font-weight: bold;
         color: #1e3c72;
+        margin-bottom: 0.2rem;
     }
-    .main-title p {
+    .subtitle {
+        font-size: 1.2rem;
         color: #2a4a7a;
+        margin-bottom: 1rem;
     }
     .stButton>button {
         background-color: #2c7be5;
@@ -51,28 +59,9 @@ st.markdown("""
         color: #1e3c72;
         font-weight: bold;
         font-family: monospace;
-        word-break: break-all;
-    }
-    .chat-message {
-        background: rgba(255,255,255,0.7);
-        border-radius: 15px;
-        padding: 10px;
-        margin: 5px 0;
-        color: #1a2a3a;
     }
     [data-testid="stSidebar"] {
         background-color: #cce4ff !important;
-    }
-    .big-title {
-        font-size: 3rem;
-        font-weight: bold;
-        color: #1e3c72;
-        margin-bottom: 0.2rem;
-    }
-    .subtitle {
-        font-size: 1.2rem;
-        color: #2a4a7a;
-        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -86,9 +75,8 @@ def get_secret(key, default=""):
 
 GROK_API_KEY = get_secret("GROK_API_KEY")
 PEXELS_API_KEY = get_secret("PEXELS_API_KEY")
-YOUTUBE_API_KEY = get_secret("YOUTUBE_API_KEY", "")
-TIKTOK_ACCESS_TOKEN = get_secret("TIKTOK_ACCESS_TOKEN", "")
-INSTAGRAM_TOKEN = get_secret("INSTAGRAM_TOKEN", "")
+YOUTUBE_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
+YOUTUBE_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
 
 # ========== SIDEBAR INFO ==========
 with st.sidebar:
@@ -105,6 +93,81 @@ with st.sidebar:
     st.markdown("🌐 [GlobalInternet.py](https://globalinternetsitepy-abh7v6tnmskxxnuplrdcgk.streamlit.app/)")
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
+
+# ========== YOUTUBE OAUTH SETUP ==========
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
+
+def get_authenticated_service():
+    creds = None
+    # The file token.pickle stores the user's access and refresh tokens.
+    if os.path.exists("token.pickle"):
+        with open("token.pickle", "rb") as token:
+            creds = pickle.load(token)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # Use the client ID and secret from secrets to build flow
+            flow = Flow.from_client_config(
+                {
+                    "web": {
+                        "client_id": YOUTUBE_CLIENT_ID,
+                        "client_secret": YOUTUBE_CLIENT_SECRET,
+                        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                        "redirect_uris": [REDIRECT_URI]
+                    }
+                },
+                scopes=SCOPES,
+                redirect_uri=REDIRECT_URI
+            )
+            # Get the authorization URL
+            auth_url, state = flow.authorization_url(
+                access_type='offline',
+                include_granted_scopes='true'
+            )
+            st.session_state['oauth_state'] = state
+            st.info("Please click the link below to authorize YouTube uploads.")
+            st.markdown(f"[Authorize YouTube Upload]({auth_url})")
+            # Wait for callback
+            query_params = st.query_params
+            if "code" in query_params:
+                code = query_params["code"]
+                flow.fetch_token(code=code)
+                creds = flow.credentials
+                # Save credentials for next run
+                with open("token.pickle", "wb") as token:
+                    pickle.dump(creds, token)
+                st.success("Authentication successful! You can now upload videos.")
+                st.rerun()
+            else:
+                st.stop()
+    return build("youtube", "v3", credentials=creds)
+
+# ========== FUNCTION TO UPLOAD TO YOUTUBE ==========
+def upload_to_youtube(video_path, title, description, category_id="22", privacy_status="public"):
+    youtube = get_authenticated_service()
+    body = {
+        "snippet": {
+            "title": title,
+            "description": description,
+            "tags": ["faceless", "AI generated", "automated"],
+            "categoryId": category_id
+        },
+        "status": {
+            "privacyStatus": privacy_status
+        }
+    }
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    request = youtube.videos().insert(
+        part="snippet,status",
+        body=body,
+        media_body=media
+    )
+    response = request.execute()
+    return response
 
 # ========== MAIN INTERFACE WITH BIG TITLE AND SUBTITLE ==========
 col1, col2 = st.columns([4, 1])
@@ -124,10 +187,15 @@ with col2:
 niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to social media (requires OAuth credentials)")
+youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
+youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Grok AI and Pexels clips.")
+privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
-if st.button("🚀 Generate & Post Video", use_container_width=True):
+if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROK_API_KEY:
-        st.error("Grok API key not found in Streamlit secrets. Please add GROK_API_KEY.")
+        st.error("Grok API key not found in Streamlit secrets.")
+    elif not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET:
+        st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
     else:
         with st.spinner("Generating script using Grok AI..."):
             # 1. Generate script using Grok API
@@ -137,7 +205,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
             }
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
-                "model": "grok-1",  # Adjust if Grok uses a different model name
+                "model": "grok-1",
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -215,20 +283,24 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
             st.success("Video assembled successfully!")
             st.video(output_video)
 
-        # 5. Auto-post to social media (requires OAuth – placeholder)
+        # 5. Upload to YouTube
         if auto_post:
-            posted = False
-            if YOUTUBE_API_KEY:
-                st.info("YouTube auto-upload requires OAuth 2.0 credentials (Client ID & Secret). Set up OAuth in your app.")
-            if TIKTOK_ACCESS_TOKEN:
-                st.info("TikTok upload requires additional OAuth setup. Not implemented in this demo.")
-            if INSTAGRAM_TOKEN:
-                st.info("Instagram upload requires Graph API setup. Not implemented in this demo.")
-            if not posted:
-                st.warning("Auto‑posting not fully implemented. You can download the video manually.")
+            with st.spinner("Uploading to YouTube..."):
+                try:
+                    upload_result = upload_to_youtube(
+                        video_path=output_video,
+                        title=youtube_title,
+                        description=youtube_description,
+                        privacy_status=privacy
+                    )
+                    video_id = upload_result['id']
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                    st.success(f"Video uploaded successfully! [Watch on YouTube]({video_url})")
+                except Exception as e:
+                    st.error(f"YouTube upload failed: {e}")
         else:
             st.info("Auto‑posting disabled. You can download the video manually.")
 
-        # 6. Download button
+        # 6. Download button (always available)
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
