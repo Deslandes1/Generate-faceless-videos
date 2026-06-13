@@ -20,28 +20,15 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== DIAGNOSTIC – REMOVE AFTER TESTING ==========
-st.write("### 🔍 Secret diagnostic (remove later)")
-all_keys = list(st.secrets.keys())
-st.write("Secrets found:", all_keys)
-if "GROK_API_KEY" in st.secrets:
-    key_len = len(st.secrets["GROK_API_KEY"])
-    st.write(f"GROK_API_KEY exists, length: {key_len}")
-    if key_len == 0:
-        st.error("GROK_API_KEY is present but empty! Please fill it.")
-else:
-    st.error("GROK_API_KEY NOT found in secrets!")
-st.markdown("---")
-
 # ========== LOAD API KEYS ==========
 GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")  # Your Groq key (stored as GROK_API_KEY)
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
-REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
+REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app")
 
 if not GROQ_API_KEY:
-    st.error("GROK_API_KEY (used as Groq key) is missing. Please add it to Streamlit secrets.")
+    st.error("GROK_API_KEY (Groq key) is missing. Please add it to Streamlit secrets.")
     st.stop()
 
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
@@ -124,11 +111,11 @@ def get_youtube_service():
                         "client_secret": YOUTUBE_CLIENT_SECRET,
                         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                         "token_uri": "https://oauth2.googleapis.com/token",
-                        "redirect_uris": [REDIRECT_URI]
+                        "redirect_uris": [REDIRECT_URI + "/oauth2callback"]
                     }
                 },
                 scopes=SCOPES,
-                redirect_uri=REDIRECT_URI
+                redirect_uri=REDIRECT_URI + "/oauth2callback"
             )
             auth_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
             st.session_state['oauth_state'] = state
@@ -191,7 +178,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script using direct requests to Groq API ----------
+        # ---------- 1. Generate script with Groq (direct API call) ----------
         with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
             api_url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
