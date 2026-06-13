@@ -12,7 +12,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from groq import Groq
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -34,8 +33,8 @@ else:
     st.error("GROK_API_KEY NOT found in secrets!")
 st.markdown("---")
 
-# ========== LOAD API KEYS – using GROK_API_KEY (it is actually a Groq key) ==========
-GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")   # Use the existing secret
+# ========== LOAD API KEYS ==========
+GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")  # Your Groq key (stored as GROK_API_KEY)
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
@@ -192,18 +191,24 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script using official Groq library ----------
+        # ---------- 1. Generate script using direct requests to Groq API ----------
         with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
+            api_url = "https://api.groq.com/openai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
+            payload = {
+                "model": "llama-3.1-8b-instant",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.7,
+                "max_tokens": 300
+            }
             try:
-                client = Groq(api_key=GROQ_API_KEY)
-                prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
-                chat_completion = client.chat.completions.create(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="llama-3.1-8b-instant",
-                    temperature=0.7,
-                    max_tokens=300
-                )
-                script = chat_completion.choices[0].message.content
+                response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                response.raise_for_status()
+                script = response.json()["choices"][0]["message"]["content"]
                 st.success("Script generated!")
                 st.text_area("Generated Script", script, height=150)
             except Exception as e:
