@@ -15,7 +15,7 @@ from googleapiclient.http import MediaFileUpload
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
-    page_title="Faceless Video Automator | Groq AI",
+    page_title="Faceless Video Automator | Grok AI",
     page_icon="🎬",
     layout="wide"
 )
@@ -24,24 +24,24 @@ st.set_page_config(
 st.write("### 🔍 Secret diagnostic (remove later)")
 all_keys = list(st.secrets.keys())
 st.write("Secrets found:", all_keys)
-if "GROQ_API_KEY" in st.secrets:
-    key_len = len(st.secrets["GROQ_API_KEY"])
-    st.write(f"GROQ_API_KEY exists, length: {key_len}")
+if "GROK_API_KEY" in st.secrets:
+    key_len = len(st.secrets["GROK_API_KEY"])
+    st.write(f"GROK_API_KEY exists, length: {key_len}")
     if key_len == 0:
-        st.error("GROQ_API_KEY is present but empty! Please fill it.")
+        st.error("GROK_API_KEY is present but empty! Please fill it.")
 else:
-    st.error("GROQ_API_KEY NOT found in secrets!")
+    st.error("GROK_API_KEY NOT found in secrets!")
 st.markdown("---")
 
 # ========== LOAD API KEYS ==========
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+GROK_API_KEY = st.secrets.get("GROK_API_KEY", "")
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
 REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
-if not GROQ_API_KEY:
-    st.error("GROQ_API_KEY is missing. Please add it to Streamlit secrets.")
+if not GROK_API_KEY:
+    st.error("GROK_API_KEY is missing. Please add it to Streamlit secrets.")
     st.stop()
 
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
@@ -93,7 +93,7 @@ st.markdown("""
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/null/youtube-play.png", width=80)
     st.markdown("## **Faceless Video Automator**")
-    st.markdown("Powered by **Groq AI (Llama 3.1)**")
+    st.markdown("Powered by **Grok AI (xAI)**")
     st.markdown("---")
     st.markdown("### 🛡️ Global Security Shield")
     st.markdown(f'<div class="security-badge">🔐 Secure API connection active</div>', unsafe_allow_html=True)
@@ -169,7 +169,7 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
 with col1:
-    st.markdown('<div class="big-title">🎬 Faceless Video Automator with Groq AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="big-title">🎬 Faceless Video Automator with Grok AI</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Generate and auto-post faceless videos daily using AI.</div>', unsafe_allow_html=True)
 with col2:
     st.image(
@@ -182,36 +182,37 @@ niche = st.text_input("Enter your video niche (e.g., motivation, history, techno
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
 youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
-youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and Pexels clips.")
+youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Grok AI and Pexels clips.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
-    if not GROQ_API_KEY:
-        st.error("Groq API key missing in secrets.")
+    if not GROK_API_KEY:
+        st.error("Grok API key missing in secrets.")
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
     else:
-        # ---------- 1. Generate script with Groq ----------
-        with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+        # ---------- 1. Generate script with xAI Grok ----------
+        with st.spinner("Generating script using Grok AI..."):
+            headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
+            # Use a known working model – try grok-beta (or grok-1)
             payload = {
-                "model": "llama-3.1-8b-instant",
+                "model": "grok-beta",  # or "grok-1" if grok-beta fails
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
             }
             try:
-                response = requests.post("https://api.groq.com/openai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+                response = requests.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
                 script = response.json()["choices"][0]["message"]["content"]
                 st.success("Script generated.")
                 st.text_area("Generated Script", script, height=150)
             except Exception as e:
-                st.error(f"Groq API error: {e}")
+                st.error(f"Grok API error: {e}")
                 st.stop()
 
-        # ---------- 2. Generate voiceover ----------
+        # ---------- 2. Voiceover ----------
         with st.spinner("Generating voiceover..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
@@ -221,7 +222,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             asyncio.run(tts())
             st.success("Voiceover ready.")
 
-        # ---------- 3. Fetch Pexels clips ----------
+        # ---------- 3. Pexels clips ----------
         video_clips = []
         if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
@@ -270,12 +271,13 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             st.success("Video assembled.")
             st.video(output_video)
 
-        # ---------- 5. Upload to YouTube (if enabled) ----------
+        # ---------- 5. Upload to YouTube ----------
         if auto_post:
             with st.spinner("Uploading to YouTube..."):
                 try:
                     result = upload_to_youtube(output_video, youtube_title, youtube_description, privacy_status=privacy)
-                    st.success(f"Uploaded! [Watch on YouTube](https://www.youtube.com/watch?v={result['id']})")
+                    video_url = f"https://www.youtube.com/watch?v={result['id']}"
+                    st.success(f"Uploaded! [Watch on YouTube]({video_url})")
                 except Exception as e:
                     st.error(f"YouTube upload failed: {e}")
         else:
