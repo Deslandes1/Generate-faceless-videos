@@ -63,6 +63,17 @@ st.markdown("""
     [data-testid="stSidebar"] {
         background-color: #cce4ff !important;
     }
+    .big-title {
+        font-size: 3rem;
+        font-weight: bold;
+        color: #1e3c72;
+        margin-bottom: 0.2rem;
+    }
+    .subtitle {
+        font-size: 1.2rem;
+        color: #2a4a7a;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -95,12 +106,12 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
 
-# ========== MAIN INTERFACE WITH PROFILE PICTURE ON THE RIGHT ==========
+# ========== MAIN INTERFACE WITH BIG TITLE AND SUBTITLE ==========
 col1, col2 = st.columns([4, 1])
 
 with col1:
-    st.markdown("🎬 **Faceless Video Automator with Grok AI**")
-    st.markdown("Generate and auto-post faceless videos daily using AI.")
+    st.markdown('<div class="big-title">🎬 Faceless Video Automator with Grok AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Generate and auto-post faceless videos daily using AI.</div>', unsafe_allow_html=True)
 
 with col2:
     st.image(
