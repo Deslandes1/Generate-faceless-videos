@@ -20,6 +20,13 @@ st.set_page_config(
     layout="wide"
 )
 
+# ========== DIAGNOSTIC – REMOVE AFTER TESTING ==========
+st.write("All secrets keys:", list(st.secrets.keys()))
+if "GROK_API_KEY" in st.secrets:
+    st.write("GROK_API_KEY exists, length:", len(st.secrets["GROK_API_KEY"]))
+else:
+    st.error("GROK_API_KEY NOT found in secrets!")
+
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
 st.markdown("""
 <style>
@@ -99,7 +106,6 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 def get_youtube_service():
     creds = None
-    # Try to load token from file (works in Streamlit Cloud for the session)
     if os.path.exists("token.pickle"):
         with open("token.pickle", "rb") as token:
             creds = pickle.load(token)
@@ -108,7 +114,6 @@ def get_youtube_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # Build flow using client config from secrets
             flow = Flow.from_client_config(
                 {
                     "web": {
@@ -122,20 +127,17 @@ def get_youtube_service():
                 scopes=SCOPES,
                 redirect_uri=REDIRECT_URI
             )
-            # Generate authorization URL
             auth_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
             st.session_state['oauth_state'] = state
             st.info("YouTube authentication required. Click the link below to authorize.")
             st.markdown(f"[Authorize YouTube Upload]({auth_url})")
             st.markdown("After granting permission, you will be redirected back. The app will continue automatically.")
             
-            # Wait for the redirect with code
             query_params = st.query_params
             if "code" in query_params:
                 code = query_params["code"]
                 flow.fetch_token(code=code)
                 creds = flow.credentials
-                # Save token for this session
                 with open("token.pickle", "wb") as token:
                     pickle.dump(creds, token)
                 st.success("YouTube authentication successful! You can now upload.")
