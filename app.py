@@ -34,7 +34,7 @@ else:
 st.markdown("---")
 
 # ========== LOAD API KEYS ==========
-GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")  # Using the same secret name
+GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")  # Use the same secret name
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
@@ -191,9 +191,9 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script with Groq (Llama 3.1) ----------
+        # ---------- 1. Generate script with Groq (Llama 3.1) - CORRECTED ----------
         with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
-            api_url = "https://api.groq.com/openai/v1/chat/completions"
+            api_url = "https://api.groq.com/openai/v1/chat/completions"  # No trailing slash
             headers = {
                 "Authorization": f"Bearer {GROQ_API_KEY}",
                 "Content-Type": "application/json"
