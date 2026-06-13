@@ -96,7 +96,6 @@ with st.sidebar:
     st.caption("© 2026 GlobalInternet.py")
 
 # ========== MAIN INTERFACE WITH PROFILE PICTURE ON THE RIGHT ==========
-# Create two columns: one for the title, one for the image
 col1, col2 = st.columns([4, 1])
 
 with col1:
@@ -106,9 +105,8 @@ with col1:
 with col2:
     st.image(
         "https://raw.githubusercontent.com/Deslandes1/Generate-faceless-videos/main/Gesner%20Deslandes.png",
-        width=100,
-        caption="Gesner Deslandes",
-        use_container_width=False
+        width=120,
+        caption="Gesner Deslandes"
     )
 
 # Input fields
@@ -142,7 +140,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
             except Exception as e:
                 st.error(f"Grok API error: {e}")
                 st.stop()
-        
+
         # 2. Generate voiceover (edge-tts)
         with st.spinner("Generating voiceover..."):
             voice = "en-US-JennyNeural"
@@ -152,7 +150,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
                 await comm.save(output_audio)
             asyncio.run(tts())
             st.success("Voiceover generated.")
-        
+
         # 3. Fetch stock clips from Pexels (if API key provided)
         video_clips = []
         if PEXELS_API_KEY:
@@ -183,7 +181,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
                 video_clips = [None]
         else:
             video_clips = [None]
-        
+
         # 4. Assemble video with moviepy
         with st.spinner("Assembling final video..."):
             audio_clip = AudioFileClip(output_audio)
@@ -205,7 +203,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
             final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
             st.success("Video assembled successfully!")
             st.video(output_video)
-        
+
         # 5. Auto-post to social media (requires OAuth – placeholder)
         if auto_post:
             posted = False
@@ -219,7 +217,7 @@ if st.button("🚀 Generate & Post Video", use_container_width=True):
                 st.warning("Auto‑posting not fully implemented. You can download the video manually.")
         else:
             st.info("Auto‑posting disabled. You can download the video manually.")
-        
+
         # 6. Download button
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
