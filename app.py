@@ -21,11 +21,17 @@ st.set_page_config(
 )
 
 # ========== DIAGNOSTIC – REMOVE AFTER TESTING ==========
-st.write("All secrets keys:", list(st.secrets.keys()))
+st.write("### 🔍 Secret diagnostic (remove later)")
+all_keys = list(st.secrets.keys())
+st.write("Secrets found:", all_keys)
 if "GROK_API_KEY" in st.secrets:
-    st.write("GROK_API_KEY exists, length:", len(st.secrets["GROK_API_KEY"]))
+    key_len = len(st.secrets["GROK_API_KEY"])
+    st.write(f"GROK_API_KEY exists, length: {key_len}")
+    if key_len == 0:
+        st.error("GROK_API_KEY is present but empty! Please fill it.")
 else:
     st.error("GROK_API_KEY NOT found in secrets!")
+st.markdown("---")
 
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
 st.markdown("""
@@ -72,18 +78,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ========== LOAD API KEYS FROM STREAMLIT SECRETS ==========
-def get_secret(key, default=""):
-    try:
-        return st.secrets[key]
-    except:
-        return default
+# ========== LOAD API KEYS DIRECTLY FROM SECRETS ==========
+GROK_API_KEY = st.secrets.get("GROK_API_KEY", "")
+PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
+YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
+YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
+REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
-GROK_API_KEY = get_secret("GROK_API_KEY")
-PEXELS_API_KEY = get_secret("PEXELS_API_KEY")
-YOUTUBE_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
-YOUTUBE_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
-REDIRECT_URI = get_secret("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
+# Additional check for empty key
+if GROK_API_KEY == "":
+    st.error("GROK_API_KEY is empty. Please set a valid key in secrets.")
+    st.stop()
 
 # ========== SIDEBAR INFO ==========
 with st.sidebar:
