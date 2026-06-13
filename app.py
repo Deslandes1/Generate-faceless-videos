@@ -1,12 +1,9 @@
 import streamlit as st
 import requests
-import os
-import json
 import tempfile
-import edge_tts
 import asyncio
+import edge_tts
 from moviepy.editor import *
-import time
 from datetime import datetime
 
 # ========== PAGE CONFIG ==========
@@ -16,7 +13,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== LIGHT BLUE THEME CSS ==========
+# ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
 st.markdown("""
 <style>
     .stApp {
@@ -98,10 +95,23 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
 
-# ========== MAIN INTERFACE ==========
-st.title("🎬 Faceless Video Automator with Grok AI")
-st.markdown("Generate and auto-post faceless videos daily using AI.")
+# ========== MAIN INTERFACE WITH PROFILE PICTURE ON THE RIGHT ==========
+# Create two columns: one for the title, one for the image
+col1, col2 = st.columns([4, 1])
 
+with col1:
+    st.markdown("🎬 **Faceless Video Automator with Grok AI**")
+    st.markdown("Generate and auto-post faceless videos daily using AI.")
+
+with col2:
+    st.image(
+        "https://raw.githubusercontent.com/Deslandes1/Generate-faceless-videos/main/Gesner%20Deslandes.png",
+        width=100,
+        caption="Gesner Deslandes",
+        use_container_width=False
+    )
+
+# Input fields
 niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to social media (requires OAuth credentials)")
