@@ -20,6 +20,30 @@ st.set_page_config(
     layout="wide"
 )
 
+# ========== DIAGNOSTIC – REMOVE LATER ==========
+st.write("### 🔍 Secret diagnostic (remove later)")
+all_keys = list(st.secrets.keys())
+st.write("Secrets found:", all_keys)
+if "GROQ_API_KEY" in st.secrets:
+    key_len = len(st.secrets["GROQ_API_KEY"])
+    st.write(f"GROQ_API_KEY exists, length: {key_len}")
+    if key_len == 0:
+        st.error("GROQ_API_KEY is present but empty! Please fill it.")
+else:
+    st.error("GROQ_API_KEY NOT found in secrets!")
+st.markdown("---")
+
+# ========== LOAD API KEYS ==========
+GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
+YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
+YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
+REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
+
+if not GROQ_API_KEY:
+    st.error("GROQ_API_KEY is missing. Please add it to Streamlit secrets.")
+    st.stop()
+
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
 st.markdown("""
 <style>
@@ -65,18 +89,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ========== LOAD API KEYS FROM SECRETS ==========
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
-PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
-YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
-YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
-REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
-
-if GROQ_API_KEY == "":
-    st.error("GROQ_API_KEY is missing. Please add it to Streamlit secrets.")
-    st.stop()
-
-# ========== SIDEBAR INFO ==========
+# ========== SIDEBAR ==========
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/null/youtube-play.png", width=80)
     st.markdown("## **Faceless Video Automator**")
@@ -92,7 +105,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
 
-# ========== YOUTUBE OAUTH FUNCTION (unchanged) ==========
+# ========== YOUTUBE OAUTH (unchanged) ==========
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 def get_youtube_service():
@@ -121,7 +134,7 @@ def get_youtube_service():
             st.session_state['oauth_state'] = state
             st.info("YouTube authentication required. Click the link below to authorize.")
             st.markdown(f"[Authorize YouTube Upload]({auth_url})")
-            st.markdown("After granting permission, you will be redirected back. The app will continue automatically.")
+            st.markdown("After granting permission, you will be redirected back.")
             query_params = st.query_params
             if "code" in query_params:
                 code = query_params["code"]
@@ -129,7 +142,7 @@ def get_youtube_service():
                 creds = flow.credentials
                 with open("token.pickle", "wb") as token:
                     pickle.dump(creds, token)
-                st.success("YouTube authentication successful! You can now upload.")
+                st.success("YouTube authentication successful!")
                 st.rerun()
             else:
                 st.stop()
@@ -153,13 +166,11 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== MAIN INTERFACE ==========
+# ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
-
 with col1:
     st.markdown('<div class="big-title">🎬 Faceless Video Automator with Groq AI</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Generate and auto-post faceless videos daily using AI.</div>', unsafe_allow_html=True)
-
 with col2:
     st.image(
         "https://raw.githubusercontent.com/Deslandes1/Generate-faceless-videos/main/Gesner%20Deslandes.png",
@@ -167,7 +178,6 @@ with col2:
         caption="Gesner Deslandes"
     )
 
-# Input fields
 niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
@@ -179,14 +189,11 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROQ_API_KEY:
         st.error("Groq API key missing in secrets.")
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
-        st.error("YouTube OAuth credentials missing.")
+        st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
     else:
+        # ---------- 1. Generate script with Groq ----------
         with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
-            # Groq API endpoint and payload
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
                 "model": "llama-3.1-8b-instant",
@@ -204,6 +211,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
+        # ---------- 2. Generate voiceover ----------
         with st.spinner("Generating voiceover..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
@@ -213,6 +221,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             asyncio.run(tts())
             st.success("Voiceover ready.")
 
+        # ---------- 3. Fetch Pexels clips ----------
         video_clips = []
         if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
@@ -240,6 +249,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         else:
             video_clips = [None]
 
+        # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
@@ -260,16 +270,17 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             st.success("Video assembled.")
             st.video(output_video)
 
+        # ---------- 5. Upload to YouTube (if enabled) ----------
         if auto_post:
             with st.spinner("Uploading to YouTube..."):
                 try:
                     result = upload_to_youtube(output_video, youtube_title, youtube_description, privacy_status=privacy)
-                    video_url = f"https://www.youtube.com/watch?v={result['id']}"
-                    st.success(f"Uploaded! [Watch on YouTube]({video_url})")
+                    st.success(f"Uploaded! [Watch on YouTube](https://www.youtube.com/watch?v={result['id']})")
                 except Exception as e:
                     st.error(f"YouTube upload failed: {e}")
         else:
             st.info("Auto‑upload disabled. Download video below.")
 
+        # ---------- 6. Download button ----------
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
