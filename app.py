@@ -185,24 +185,26 @@ youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {d
 youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Grok AI and Pexels clips.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
+# Model selection dropdown (optional but helpful)
+model_options = ["grok-beta", "grok-4.3", "grok-1", "grok-2"]
+selected_model = st.selectbox("Grok Model (try different if one fails)", model_options, index=0)
+
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROK_API_KEY:
         st.error("Grok API key missing in secrets.")
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
-        st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
+        st.error("YouTube OAuth credentials missing.")
     else:
         # ---------- 1. Generate script with xAI Grok (corrected) ----------
-        with st.spinner("Generating script using Grok AI..."):
+        with st.spinner(f"Generating script using Grok AI ({selected_model})..."):
             api_url = "https://api.x.ai/v1/chat/completions"
             headers = {
                 "Authorization": f"Bearer {GROK_API_KEY}",
                 "Content-Type": "application/json"
             }
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
-            # Use grok-4.3 (stable) – if fails, change to grok-beta or grok-1
-            model_name = "grok-4.3"
             payload = {
-                "model": model_name,
+                "model": selected_model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
@@ -211,7 +213,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 response = requests.post(api_url, headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
                 script = response.json()["choices"][0]["message"]["content"]
-                st.success("Script generated.")
+                st.success("Script generated!")
                 st.text_area("Generated Script", script, height=150)
             except Exception as e:
                 st.error(f"Grok API error: {e}")
