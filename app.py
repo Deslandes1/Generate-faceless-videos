@@ -85,7 +85,6 @@ YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
 REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
-# Additional check for empty key
 if GROK_API_KEY == "":
     st.error("GROK_API_KEY is empty. Please set a valid key in secrets.")
     st.stop()
@@ -200,12 +199,14 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         with st.spinner("Generating script using Grok AI..."):
             headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
+            # ========== FIXED PAYLOAD WITH CORRECT MODEL NAME ==========
             payload = {
-                "model": "grok-1",
+                "model": "grok-beta",  # Correct model identifier for xAI Grok
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
             }
+            # ===========================================================
             try:
                 response = requests.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
