@@ -12,7 +12,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from groq import Groq  # Official Groq library
+from groq import Groq
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -25,24 +25,24 @@ st.set_page_config(
 st.write("### 🔍 Secret diagnostic (remove later)")
 all_keys = list(st.secrets.keys())
 st.write("Secrets found:", all_keys)
-if "GROQ_API_KEY" in st.secrets:
-    key_len = len(st.secrets["GROQ_API_KEY"])
-    st.write(f"GROQ_API_KEY exists, length: {key_len}")
+if "GROK_API_KEY" in st.secrets:
+    key_len = len(st.secrets["GROK_API_KEY"])
+    st.write(f"GROK_API_KEY exists, length: {key_len}")
     if key_len == 0:
-        st.error("GROQ_API_KEY is present but empty! Please fill it.")
+        st.error("GROK_API_KEY is present but empty! Please fill it.")
 else:
-    st.error("GROQ_API_KEY NOT found in secrets!")
+    st.error("GROK_API_KEY NOT found in secrets!")
 st.markdown("---")
 
-# ========== LOAD API KEYS ==========
-GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")  # Now using the correct secret
+# ========== LOAD API KEYS – using GROK_API_KEY (it is actually a Groq key) ==========
+GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")   # Use the existing secret
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
 REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
 if not GROQ_API_KEY:
-    st.error("GROQ_API_KEY is missing. Please add it to Streamlit secrets.")
+    st.error("GROK_API_KEY (used as Groq key) is missing. Please add it to Streamlit secrets.")
     st.stop()
 
 # ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
