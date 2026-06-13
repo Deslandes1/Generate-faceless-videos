@@ -7,10 +7,9 @@ from moviepy.editor import *
 from datetime import datetime
 import os
 import pickle
-import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow, InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
@@ -77,6 +76,7 @@ GROK_API_KEY = get_secret("GROK_API_KEY")
 PEXELS_API_KEY = get_secret("PEXELS_API_KEY")
 YOUTUBE_CLIENT_ID = get_secret("YOUTUBE_CLIENT_ID")
 YOUTUBE_CLIENT_SECRET = get_secret("YOUTUBE_CLIENT_SECRET")
+REDIRECT_URI = get_secret("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
 # ========== SIDEBAR INFO ==========
 with st.sidebar:
@@ -94,22 +94,21 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
 
-# ========== YOUTUBE OAUTH SETUP ==========
+# ========== YOUTUBE OAUTH FUNCTION ==========
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app/oauth2callback")
 
-def get_authenticated_service():
+def get_youtube_service():
     creds = None
-    # The file token.pickle stores the user's access and refresh tokens.
+    # Try to load token from file (works in Streamlit Cloud for the session)
     if os.path.exists("token.pickle"):
         with open("token.pickle", "rb") as token:
             creds = pickle.load(token)
-    # If there are no (valid) credentials available, let the user log in.
+
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # Use the client ID and secret from secrets to build flow
+            # Build flow using client config from secrets
             flow = Flow.from_client_config(
                 {
                     "web": {
@@ -123,37 +122,35 @@ def get_authenticated_service():
                 scopes=SCOPES,
                 redirect_uri=REDIRECT_URI
             )
-            # Get the authorization URL
-            auth_url, state = flow.authorization_url(
-                access_type='offline',
-                include_granted_scopes='true'
-            )
+            # Generate authorization URL
+            auth_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
             st.session_state['oauth_state'] = state
-            st.info("Please click the link below to authorize YouTube uploads.")
+            st.info("YouTube authentication required. Click the link below to authorize.")
             st.markdown(f"[Authorize YouTube Upload]({auth_url})")
-            # Wait for callback
+            st.markdown("After granting permission, you will be redirected back. The app will continue automatically.")
+            
+            # Wait for the redirect with code
             query_params = st.query_params
             if "code" in query_params:
                 code = query_params["code"]
                 flow.fetch_token(code=code)
                 creds = flow.credentials
-                # Save credentials for next run
+                # Save token for this session
                 with open("token.pickle", "wb") as token:
                     pickle.dump(creds, token)
-                st.success("Authentication successful! You can now upload videos.")
+                st.success("YouTube authentication successful! You can now upload.")
                 st.rerun()
             else:
                 st.stop()
     return build("youtube", "v3", credentials=creds)
 
-# ========== FUNCTION TO UPLOAD TO YOUTUBE ==========
 def upload_to_youtube(video_path, title, description, category_id="22", privacy_status="public"):
-    youtube = get_authenticated_service()
+    youtube = get_youtube_service()
     body = {
         "snippet": {
             "title": title,
             "description": description,
-            "tags": ["faceless", "AI generated", "automated"],
+            "tags": ["faceless", "AI", "automated"],
             "categoryId": category_id
         },
         "status": {
@@ -161,15 +158,11 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
         }
     }
     media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body=body,
-        media_body=media
-    )
+    request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
     response = request.execute()
     return response
 
-# ========== MAIN INTERFACE WITH BIG TITLE AND SUBTITLE ==========
+# ========== MAIN INTERFACE ==========
 col1, col2 = st.columns([4, 1])
 
 with col1:
@@ -186,23 +179,19 @@ with col2:
 # Input fields
 niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
-auto_post = st.checkbox("Auto‑post to social media (requires OAuth credentials)")
+auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
 youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
 youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Grok AI and Pexels clips.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROK_API_KEY:
-        st.error("Grok API key not found in Streamlit secrets.")
-    elif not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET:
+        st.error("Grok API key missing in secrets.")
+    elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
     else:
         with st.spinner("Generating script using Grok AI..."):
-            # 1. Generate script using Grok API
-            headers = {
-                "Authorization": f"Bearer {GROK_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
                 "model": "grok-1",
@@ -214,13 +203,12 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 response = requests.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
                 script = response.json()["choices"][0]["message"]["content"]
-                st.success("Script generated successfully.")
+                st.success("Script generated.")
                 st.text_area("Generated Script", script, height=150)
             except Exception as e:
-                st.error(f"Grok API error: {e}")
+                st.error(f"Grok error: {e}")
                 st.stop()
 
-        # 2. Generate voiceover (edge-tts)
         with st.spinner("Generating voiceover..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
@@ -228,9 +216,8 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 comm = edge_tts.Communicate(script, voice)
                 await comm.save(output_audio)
             asyncio.run(tts())
-            st.success("Voiceover generated.")
+            st.success("Voiceover ready.")
 
-        # 3. Fetch stock clips from Pexels (if API key provided)
         video_clips = []
         if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
@@ -241,8 +228,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 try:
                     resp = requests.get(url, headers=headers_pex, timeout=10)
                     if resp.status_code == 200:
-                        data = resp.json()
-                        for video in data.get("videos", []):
+                        for video in resp.json().get("videos", []):
                             video_files = video.get("video_files", [])
                             if video_files:
                                 clip_url = video_files[0]["link"]
@@ -252,55 +238,43 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
                                         f.write(chunk)
                                 video_clips.append(clip_path)
-                    else:
-                        st.warning("Pexels API limit or error. Using fallback black screen.")
                 except:
-                    st.warning("Could not fetch stock clips. Using fallback.")
+                    st.warning("Pexels fetch failed. Using fallback.")
             if not video_clips:
                 video_clips = [None]
         else:
             video_clips = [None]
 
-        # 4. Assemble video with moviepy
-        with st.spinner("Assembling final video..."):
+        with st.spinner("Assembling video..."):
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
             clips = []
-            for i, clip_path in enumerate(video_clips):
+            for clip_path in video_clips:
                 if clip_path is None:
-                    txt_clip = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
-                    txt_clip = txt_clip.set_duration(duration/len(video_clips) if len(video_clips)>0 else duration).set_position('center')
-                    bg_clip = ColorClip(size=(640,480), color=(0,0,0), duration=duration/len(video_clips) if len(video_clips)>0 else duration)
-                    clip = CompositeVideoClip([bg_clip, txt_clip])
+                    txt = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
+                    txt = txt.set_duration(duration/len(video_clips) if video_clips else duration).set_position('center')
+                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=duration/len(video_clips) if video_clips else duration)
+                    clip = CompositeVideoClip([bg, txt])
                 else:
-                    clip = VideoFileClip(clip_path).subclip(0, duration/len(video_clips))
-                    clip = clip.resize((640,480))
+                    clip = VideoFileClip(clip_path).subclip(0, duration/len(video_clips)).resize((640,480))
                 clips.append(clip)
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
-            st.success("Video assembled successfully!")
+            st.success("Video assembled.")
             st.video(output_video)
 
-        # 5. Upload to YouTube
         if auto_post:
             with st.spinner("Uploading to YouTube..."):
                 try:
-                    upload_result = upload_to_youtube(
-                        video_path=output_video,
-                        title=youtube_title,
-                        description=youtube_description,
-                        privacy_status=privacy
-                    )
-                    video_id = upload_result['id']
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                    st.success(f"Video uploaded successfully! [Watch on YouTube]({video_url})")
+                    result = upload_to_youtube(output_video, youtube_title, youtube_description, privacy_status=privacy)
+                    video_url = f"https://www.youtube.com/watch?v={result['id']}"
+                    st.success(f"Uploaded! [Watch on YouTube]({video_url})")
                 except Exception as e:
                     st.error(f"YouTube upload failed: {e}")
         else:
-            st.info("Auto‑posting disabled. You can download the video manually.")
+            st.info("Auto‑upload disabled. Download video below.")
 
-        # 6. Download button (always available)
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
