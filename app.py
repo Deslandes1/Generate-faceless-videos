@@ -20,7 +20,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ========== DIAGNOSTIC – REMOVE LATER ==========
+# ========== DIAGNOSTIC – REMOVE AFTER TESTING ==========
 st.write("### 🔍 Secret diagnostic (remove later)")
 all_keys = list(st.secrets.keys())
 st.write("Secrets found:", all_keys)
@@ -105,7 +105,7 @@ with st.sidebar:
     st.markdown("---")
     st.caption("© 2026 GlobalInternet.py")
 
-# ========== YOUTUBE OAUTH (unchanged) ==========
+# ========== YOUTUBE OAUTH ==========
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 def get_youtube_service():
@@ -191,19 +191,24 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing. Add YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to secrets.")
     else:
-        # ---------- 1. Generate script with xAI Grok ----------
+        # ---------- 1. Generate script with xAI Grok (corrected) ----------
         with st.spinner("Generating script using Grok AI..."):
-            headers = {"Authorization": f"Bearer {GROK_API_KEY}", "Content-Type": "application/json"}
+            api_url = "https://api.x.ai/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {GROK_API_KEY}",
+                "Content-Type": "application/json"
+            }
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
-            # Use a known working model – try grok-beta (or grok-1)
+            # Use grok-4.3 (stable) – if fails, change to grok-beta or grok-1
+            model_name = "grok-4.3"
             payload = {
-                "model": "grok-beta",  # or "grok-1" if grok-beta fails
+                "model": model_name,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.7,
                 "max_tokens": 300
             }
             try:
-                response = requests.post("https://api.x.ai/v1/chat/completions", headers=headers, json=payload, timeout=30)
+                response = requests.post(api_url, headers=headers, json=payload, timeout=30)
                 response.raise_for_status()
                 script = response.json()["choices"][0]["message"]["content"]
                 st.success("Script generated.")
