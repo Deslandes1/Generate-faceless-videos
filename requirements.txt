@@ -1,9 +1,9 @@
 streamlit==1.35.0
 requests==2.31.0
-gTTS==2.5.1
+edge-tts==6.1.9
 numpy==1.26.3
 moviepy==1.0.3
-Pillow==10.2.0
+Pillow==9.5.0
 imageio[ffmpeg]==2.33.1
 google-auth==2.29.0
 google-auth-oauthlib==1.2.0
