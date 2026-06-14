@@ -166,7 +166,7 @@ def generate_voice_with_gtts(script, output_path, lang='en'):
         st.error(f"gTTS error: {e}")
         return False
 
-# ========== CREATE TEXT CLIP (fallback) ==========
+# ========== CREATE TEXT CLIP – FULL SCRIPT, AUTO FONT SIZE ==========
 def create_text_clip(text, duration, size=(640,480), fontsize=24):
     img = Image.new('RGB', size, color='black')
     draw = ImageDraw.Draw(img)
@@ -174,6 +174,7 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
     except:
         font = ImageFont.load_default()
+    # Wrap text
     words = text.split()
     lines = []
     current_line = ""
@@ -187,6 +188,9 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
             current_line = word + " "
     if current_line:
         lines.append(current_line)
+    # If no lines (very short text), add the original text as a single line
+    if not lines:
+        lines = [text]
     line_height = fontsize + 6
     total_height = len(lines) * line_height
     y = (size[1] - total_height) // 2
@@ -262,7 +266,6 @@ if use_manual_script:
             st.error("Please enter a non‑empty script.")
     st.info(f"Current custom script length: {len(st.session_state.manual_script)} characters.")
 else:
-    # In AI mode, clear any stored manual script (optional)
     pass
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
@@ -356,9 +359,16 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     except:
                         st.warning("Pexels fetch failed.")
             if not visual_clips:
-                # final fallback: text overlay
-                text_to_show = script[:200] if len(script) > 200 else script
-                visual_clips = [create_text_clip(text_to_show, duration, size=(640,480), fontsize=24)]
+                # Final fallback: text overlay – use the FULL script, adjust font size
+                full_script = script
+                # Estimate font size: start at 24, reduce if text is long
+                fontsize = 24
+                if len(full_script) > 400:
+                    fontsize = 18
+                if len(full_script) > 600:
+                    fontsize = 14
+                st.info(f"Using text overlay with font size {fontsize}. Full script length: {len(full_script)} chars.")
+                visual_clips = [create_text_clip(full_script, duration, size=(640,480), fontsize=fontsize)]
 
         # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
