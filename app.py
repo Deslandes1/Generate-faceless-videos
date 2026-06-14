@@ -225,30 +225,21 @@ def create_image_clip(image_file, duration, target_size=(640,480)):
     clip = ImageClip(img_array, duration=duration)
     return clip
 
-# ========== HELPER: Split script into parts for each image ==========
-def split_script_for_images(script, num_images):
+# ========== SCRIPT SPLITTER WITH MULTI‑PARAGRAPH PER IMAGE ==========
+def split_script_for_images(script, num_images, paragraphs_per_image):
     # Split by double newlines (paragraphs)
     paragraphs = [p.strip() for p in script.split('\n\n') if p.strip()]
-    # If we have exactly num_images+1 paragraphs (image descriptions + credit), use them.
-    # Otherwise, assume the script is one long description and split equally? Not ideal.
-    if len(paragraphs) == num_images + 1:
-        image_parts = paragraphs[:-1]
-        credit_part = paragraphs[-1]
-        return image_parts, credit_part
-    else:
-        # Fallback: treat whole script as one, and credit as last image's part? Better to warn.
-        st.warning(f"Script has {len(paragraphs)} paragraphs but {num_images} images. Please format script with one paragraph per image and a final credit paragraph separated by blank lines.")
-        # Simple split: assign each image an equal portion of the script (by character count)
-        total_len = len(script)
-        part_len = total_len // num_images
-        image_parts = []
-        start = 0
-        for i in range(num_images):
-            end = start + part_len if i < num_images-1 else total_len
-            image_parts.append(script[start:end].strip())
-            start = end
-        credit_part = ""
-        return image_parts, credit_part
+    total_needed = sum(paragraphs_per_image)
+    if len(paragraphs) != total_needed:
+        st.warning(f"Script has {len(paragraphs)} paragraphs but you specified {total_needed} paragraphs total. Using as many as available.")
+    # Distribute paragraphs to each image
+    image_paragraphs = []
+    start = 0
+    for i, count in enumerate(paragraphs_per_image):
+        end = start + count
+        image_paragraphs.append(paragraphs[start:end])
+        start = end
+    return image_paragraphs
 
 # ========== INIT SESSION STATE ==========
 if 'manual_script' not in st.session_state:
@@ -268,24 +259,30 @@ with col2:
         caption="Gesner Deslandes"
     )
 
-niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="motivation")
+niche = st.text_input("Enter your video niche (e.g., motivation, history, technology)", value="science education")
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
-youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
+youtube_title = st.text_input("YouTube Video Title", value=f"Educational Video - {datetime.now().strftime('%Y%m%d')}")
 youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and gTTS voice.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
 st.markdown("---")
 st.subheader("📸 Use Your Own Images (Slideshow)")
 uploaded_images = st.file_uploader(
-    "Upload images (PNG, JPG) – they will be displayed in order while the AI explains",
+    "Upload images (PNG, JPG) – they will be displayed in order",
     type=["png", "jpg", "jpeg"],
     accept_multiple_files=True
 )
 use_images = uploaded_images and len(uploaded_images) > 0
 if use_images:
-    st.success(f"{len(uploaded_images)} images uploaded. They will form a slideshow.")
-    st.info("For best sync, write your script as separate paragraphs: one paragraph per image, then a final paragraph for credits (separate paragraphs by blank lines).")
+    num_images = len(uploaded_images)
+    st.success(f"{num_images} images uploaded.")
+    st.write("How many script paragraphs should each image display?")
+    paragraphs_per_image = []
+    for i in range(num_images):
+        ppi = st.number_input(f"Paragraphs for Image {i+1}", min_value=1, value=3 if i==0 else 1, step=1, key=f"ppi_{i}")
+        paragraphs_per_image.append(ppi)
+    st.info(f"Total paragraphs needed: {sum(paragraphs_per_image)}. Write your script with exactly that many paragraphs (separated by blank lines).")
 else:
     st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
@@ -295,11 +292,11 @@ use_manual_script = st.checkbox("✍️ Use my own script instead of AI‑genera
 st.session_state.use_manual = use_manual_script
 
 if use_manual_script:
-    manual_script_text = st.text_area("Paste your custom script below:", value=st.session_state.manual_script, height=300)
+    manual_script_text = st.text_area("Paste your custom script below (paragraphs separated by blank lines):", value=st.session_state.manual_script, height=400)
     if st.button("Save Custom Script"):
         if manual_script_text.strip():
             st.session_state.manual_script = manual_script_text.strip()
-            st.success("Custom script saved! You can now click the main generate button.")
+            st.success("Custom script saved!")
         else:
             st.error("Please enter a non‑empty script.")
     st.info(f"Current custom script length: {len(st.session_state.manual_script)} characters.")
@@ -347,39 +344,36 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
 
         # ---------- 2. Prepare visual and audio segments for images ----------
         if use_images:
-            # Split script into parts for each image plus credit
-            num_images = len(uploaded_images)
-            image_parts, credit_part = split_script_for_images(script, num_images)
-            # If we have no credit part, we'll add a default one
-            if not credit_part:
-                credit_part = "This presentation was brought to you by GlobalInternet.py."
-            # Generate separate audio for each image part and credit
-            audio_segments = []
-            temp_files = []
-            # Generate audio for each image part
-            for i, part in enumerate(image_parts):
-                if not part.strip():
-                    part = f"Image {i+1}"  # fallback
-                audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-                if generate_voice_with_gtts(part, audio_path, lang_code):
-                    audio_segments.append(audio_path)
-                    temp_files.append(audio_path)
-                else:
-                    st.error(f"Voice generation failed for image part {i+1}.")
-                    st.stop()
-            # Generate audio for credit
-            credit_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            if generate_voice_with_gtts(credit_part, credit_audio, lang_code):
-                audio_segments.append(credit_audio)
-                temp_files.append(credit_audio)
-            else:
-                st.error("Voice generation failed for credit part.")
+            # Split script according to user-defined paragraphs per image
+            paragraphs = [p.strip() for p in script.split('\n\n') if p.strip()]
+            total_needed = sum(paragraphs_per_image)
+            if len(paragraphs) != total_needed:
+                st.error(f"Script has {len(paragraphs)} paragraphs but you specified {total_needed} total. Please adjust the number of paragraphs per image or your script.")
                 st.stop()
+            image_paragraphs = []
+            start = 0
+            for count in paragraphs_per_image:
+                image_paragraphs.append(paragraphs[start:start+count])
+                start += count
+            
+            # Generate audio for each paragraph of each image
+            audio_segments = []  # list of audio file paths per paragraph (in order)
+            temp_files = []
+            for img_idx, para_list in enumerate(image_paragraphs):
+                for para in para_list:
+                    if not para.strip():
+                        para = f"Image {img_idx+1} content"
+                    audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+                    if generate_voice_with_gtts(para, audio_path, lang_code):
+                        audio_segments.append(audio_path)
+                        temp_files.append(audio_path)
+                    else:
+                        st.error(f"Voice generation failed for paragraph of image {img_idx+1}.")
+                        st.stop()
             
             # Concatenate all audio segments into one file
             with st.spinner("Concatenating audio segments..."):
                 final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-                # Load each clip
                 clips = [AudioFileClip(p) for p in audio_segments]
                 combined = concatenate_audioclips(clips)
                 combined.write_audiofile(final_audio, codec='libmp3lame')
@@ -387,23 +381,19 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     clip.close()
                 output_audio = final_audio
             
-            # Create video clips: each image with duration = its audio part length
+            # Create video clips: each image gets the total duration of its assigned paragraphs
             visual_clips = []
-            for i, img_file in enumerate(uploaded_images):
-                audio_duration = AudioFileClip(audio_segments[i]).duration
-                clip = create_image_clip(img_file, audio_duration, target_size=(640,480))
+            audio_idx = 0
+            for img_idx, (img_file, para_list) in enumerate(zip(uploaded_images, image_paragraphs)):
+                total_duration = 0
+                for _ in para_list:
+                    total_duration += AudioFileClip(audio_segments[audio_idx]).duration
+                    audio_idx += 1
+                clip = create_image_clip(img_file, total_duration, target_size=(640,480))
                 visual_clips.append(clip)
-            # Add credit clip (use last image? or create a text/logo clip)
-            credit_duration = AudioFileClip(credit_audio).duration
-            # We'll create a credit screen with the contact info (could be an image or text)
-            # For simplicity, create a text clip with the credit text and contact info
-            credit_text = f"{credit_part}\n\nGesner Deslandes - GlobalInternet.py\n(509) 4738 5663\ndeslandes78@gmail.com\nhttps://globalinternetsitepy-abh7v6tnmskxxnuplrdcgk.streamlit.app/"
-            bg_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-            credit_clip = create_text_clip(credit_text, credit_duration, size=(640,480), fontsize=20, bg_color=bg_rgb, decorate=False)
-            visual_clips.append(credit_clip)
             
         else:
-            # Original behavior: single audio and single visual clip (fallback or Pexels)
+            # Original fallback (single audio, single visual)
             with st.spinner(f"Generating voiceover in {selected_lang} using gTTS..."):
                 output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
                 success = generate_voice_with_gtts(script, output_audio, lang_code)
@@ -442,34 +432,23 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     except:
                         st.warning("Pexels fetch failed.")
             if not visual_clips:
-                # Fallback text with decorations
-                full_script = script
-                fontsize = 24
-                if len(full_script) > 400:
-                    fontsize = 18
-                if len(full_script) > 600:
-                    fontsize = 14
                 bg_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                decorated_clip = create_text_clip(full_script, duration, size=(640,480), fontsize=fontsize, bg_color=bg_rgb, decorate=True)
+                fontsize = 24 if len(script) <= 400 else 18
+                decorated_clip = create_text_clip(script, duration, size=(640,480), fontsize=fontsize, bg_color=bg_rgb, decorate=True)
                 visual_clips = [decorated_clip]
 
         # ---------- 3. Assemble video ----------
         with st.spinner("Assembling video..."):
             if use_images:
-                # Already have visual_clips, need to set audio for each? Actually we will concatenate video clips and then set the concatenated audio.
                 final_video = concatenate_videoclips(visual_clips, method="compose")
-                # Set the combined audio (already created)
                 combined_audio = AudioFileClip(output_audio)
                 final_video = final_video.set_audio(combined_audio)
-                output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
             else:
-                # Original method
                 final_video = concatenate_videoclips(visual_clips, method="compose")
                 audio_clip = AudioFileClip(output_audio)
                 final_video = final_video.set_audio(audio_clip)
-                output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-                final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
+            output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+            final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
             st.success("Video assembled.")
             st.video(output_video)
 
