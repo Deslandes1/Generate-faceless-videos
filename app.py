@@ -207,6 +207,12 @@ def create_image_clip(image_file, duration, target_size=(640,480)):
     clip = ImageClip(img_array, duration=duration)
     return clip
 
+# ========== INIT SESSION STATE ==========
+if 'manual_script' not in st.session_state:
+    st.session_state.manual_script = ""
+if 'use_manual' not in st.session_state:
+    st.session_state.use_manual = False
+
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -241,19 +247,22 @@ else:
     st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
 # ========== SCRIPT GENERATION (AI OR MANUAL) ==========
-use_manual_script = st.checkbox("✍️ Use my own script instead of AI‑generated")
+st.markdown("---")
+st.subheader("📝 Script Source")
+use_manual_script = st.checkbox("✍️ Use my own script instead of AI‑generated", value=st.session_state.use_manual)
+st.session_state.use_manual = use_manual_script
+
 if use_manual_script:
-    manual_script = st.text_area("Paste your custom script below:", height=200)
-    if st.button("Confirm Script and Continue"):
-        if manual_script.strip():
-            script = manual_script.strip()
-            st.success("Using your custom script.")
-            st.text_area("Your Script", script, height=150)
+    manual_script_text = st.text_area("Paste your custom script below:", value=st.session_state.manual_script, height=200)
+    if st.button("Save Custom Script"):
+        if manual_script_text.strip():
+            st.session_state.manual_script = manual_script_text.strip()
+            st.success("Custom script saved! You can now click the main generate button.")
         else:
-            st.error("Please enter a script.")
-            st.stop()
+            st.error("Please enter a non‑empty script.")
+    st.info(f"Current custom script length: {len(st.session_state.manual_script)} characters.")
 else:
-    # AI generation will happen inside the main button logic
+    # In AI mode, clear any stored manual script (optional)
     pass
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
@@ -262,11 +271,14 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Get script (AI or manual) ----------
+        # ---------- 1. Get script ----------
         if use_manual_script:
-            if 'script' not in locals() or not script:
-                st.error("Please confirm your custom script first using the 'Confirm Script and Continue' button.")
+            if not st.session_state.manual_script:
+                st.error("You selected manual script but no script saved. Please paste your script and click 'Save Custom Script' first.")
                 st.stop()
+            script = st.session_state.manual_script
+            st.success("Using your custom script.")
+            st.text_area("Your Script", script, height=150)
         else:
             with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
                 api_url = "https://api.groq.com/openai/v1/chat/completions"
