@@ -7,6 +7,7 @@ from moviepy.editor import *
 from datetime import datetime
 import os
 import pickle
+import time
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -21,7 +22,7 @@ st.set_page_config(
 )
 
 # ========== LOAD API KEYS ==========
-GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")  # Your Groq key (stored as GROK_API_KEY)
+GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")
 PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
@@ -153,6 +154,38 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
+# ========== ROBUST VOICE GENERATION WITH RETRIES ==========
+async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            comm = edge_tts.Communicate(script, voice)
+            await comm.save(output_path)
+            return True
+        except Exception as e:
+            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # exponential backoff
+            else:
+                st.error("Voice generation failed after multiple attempts. Using silent audio.")
+                # Create a silent audio file (1 second of silence) as fallback
+                from moviepy.audio.io.AudioFileClip import AudioFileClip
+                # Create a silent clip using numpy
+                import numpy as np
+                from scipy.io import wavfile
+                # Generate silent wav
+                sample_rate = 44100
+                silence = np.zeros(int(sample_rate * 10))  # 10 seconds silence
+                temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                from scipy.io.wavfile import write
+                write(temp_wav, sample_rate, silence.astype(np.int16))
+                # Convert to mp3
+                from moviepy.editor import AudioFileClip
+                silent_clip = AudioFileClip(temp_wav)
+                silent_clip.write_audiofile(output_path, fps=44100, codec='libmp3lame')
+                os.unlink(temp_wav)
+                return False
+    return False
+
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -178,7 +211,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script with Groq (direct API call) ----------
+        # ---------- 1. Generate script with Groq ----------
         with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
             api_url = "https://api.groq.com/openai/v1/chat/completions"
             headers = {
@@ -202,15 +235,15 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover ----------
-        with st.spinner("Generating voiceover..."):
+        # ---------- 2. Voiceover with retries ----------
+        with st.spinner("Generating voiceover (may take a moment)..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            async def tts():
-                comm = edge_tts.Communicate(script, voice)
-                await comm.save(output_audio)
-            asyncio.run(tts())
-            st.success("Voiceover ready.")
+            success = await generate_voice_with_retry(script, voice, output_audio)
+            if success:
+                st.success("Voiceover ready.")
+            else:
+                st.warning("Using silent audio because voice generation failed.")
 
         # ---------- 3. Pexels clips ----------
         video_clips = []
@@ -242,7 +275,13 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
 
         # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
-            audio_clip = AudioFileClip(output_audio)
+            audio_clip = AudioFileClip(output_audio) if os.path.getsize(output_audio) > 0 else None
+            if audio_clip is None:
+                # Create a silent 5-second clip if no audio
+                audio_clip = AudioFileClip(output_audio) if os.path.exists(output_audio) else None
+            if audio_clip is None:
+                st.error("No audio available. Aborting.")
+                st.stop()
             duration = audio_clip.duration
             clips = []
             for clip_path in video_clips:
