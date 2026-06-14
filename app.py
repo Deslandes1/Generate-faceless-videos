@@ -41,12 +41,6 @@ LANG_CODES = {
     "Spanish": "es"
 }
 
-LANG_NAMES = {
-    "en": "English",
-    "fr": "French",
-    "es": "Spanish"
-}
-
 # ========== CUSTOM CSS ==========
 st.markdown("""
 <style>
@@ -99,11 +93,8 @@ with st.sidebar:
     st.markdown("Powered by **Groq AI (Llama 3.1)**")
     st.markdown("---")
     
-    # Language selection
     selected_lang = st.selectbox("🌐 Language for script & voice", list(LANG_CODES.keys()), index=0)
     lang_code = LANG_CODES[selected_lang]
-    
-    # Background color picker for text fallback
     bg_color = st.color_picker("🎨 Background color for text screen", value="#000000")
     
     st.markdown("---")
@@ -178,7 +169,6 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== VOICE GENERATION WITH gTTS (language aware) ==========
 def generate_voice_with_gtts(script, output_path, lang_code):
     try:
         tts = gTTS(text=script, lang=lang_code, slow=False)
@@ -188,8 +178,19 @@ def generate_voice_with_gtts(script, output_path, lang_code):
         st.error(f"gTTS error: {e}")
         return False
 
-# ========== CREATE TEXT CLIP – FULL SCRIPT, AUTO FONT SIZE, CUSTOM BACKGROUND ==========
-def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,0)):
+def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,0), decorate=False):
+    """
+    Create a text clip. If decorate=True, add golden stars at the top
+    and laughing emojis at the bottom (only as visual, not spoken).
+    """
+    # Prepare the displayed text with decorations
+    display_text = text
+    if decorate:
+        stars_line = "★ ★ ★ ★ ★"
+        emoji_line = "😂 😂 😂 😂 😂"
+        # Add stars at top and emojis at bottom, with line breaks
+        display_text = stars_line + "\n\n" + text + "\n\n" + emoji_line
+    
     img = Image.new('RGB', size, color=bg_color)
     draw = ImageDraw.Draw(img)
     try:
@@ -197,7 +198,7 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,
     except:
         font = ImageFont.load_default()
     # Wrap text
-    words = text.split()
+    words = display_text.split()
     lines = []
     current_line = ""
     for word in words:
@@ -211,7 +212,7 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,
     if current_line:
         lines.append(current_line)
     if not lines:
-        lines = [text]
+        lines = [display_text]
     line_height = fontsize + 6
     total_height = len(lines) * line_height
     y = (size[1] - total_height) // 2
@@ -222,7 +223,6 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,
     clip = ImageClip(img_array, duration=duration)
     return clip
 
-# ========== CREATE IMAGE CLIP FROM UPLOADED FILE ==========
 def create_image_clip(image_file, duration, target_size=(640,480)):
     img = Image.open(image_file).convert('RGB')
     img.thumbnail(target_size, Image.Resampling.LANCZOS)
@@ -257,7 +257,6 @@ youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {d
 youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and gTTS voice.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
-# Image upload section
 st.markdown("---")
 st.subheader("📸 Use Your Own Images (Slideshow)")
 uploaded_images = st.file_uploader(
@@ -271,7 +270,6 @@ if use_images:
 else:
     st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
-# ========== SCRIPT GENERATION (AI OR MANUAL) ==========
 st.markdown("---")
 st.subheader("📝 Script Source")
 use_manual_script = st.checkbox("✍️ Use my own script instead of AI‑generated", value=st.session_state.use_manual)
@@ -310,7 +308,6 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     "Authorization": f"Bearer {GROQ_API_KEY}",
                     "Content-Type": "application/json"
                 }
-                # Add language instruction to prompt
                 lang_instruction = f"Write the script in {selected_lang}."
                 prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words. {lang_instruction}"
                 payload = {
@@ -329,7 +326,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     st.error(f"Groq API error: {e}")
                     st.stop()
 
-        # ---------- 2. Voiceover with gTTS (in selected language) ----------
+        # ---------- 2. Voiceover ----------
         with st.spinner(f"Generating voiceover in {selected_lang} using gTTS..."):
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
             success = generate_voice_with_gtts(script, output_audio, lang_code)
@@ -355,7 +352,6 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error("No valid images. Aborting.")
                 st.stop()
         else:
-            # Fallback to Pexels or text
             if PEXELS_API_KEY:
                 with st.spinner("Fetching stock clips from Pexels..."):
                     headers_pex = {"Authorization": PEXELS_API_KEY}
@@ -382,17 +378,18 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     except:
                         st.warning("Pexels fetch failed.")
             if not visual_clips:
-                # Final fallback: text overlay with custom background color
+                # Fallback text with decorations (stars & emojis)
                 full_script = script
                 fontsize = 24
                 if len(full_script) > 400:
                     fontsize = 18
                 if len(full_script) > 600:
                     fontsize = 14
-                # Convert hex color to RGB tuple
                 bg_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                st.info(f"Using text overlay with background color {bg_color}, font size {fontsize}. Script length: {len(full_script)} chars.")
-                visual_clips = [create_text_clip(full_script, duration, size=(640,480), fontsize=fontsize, bg_color=bg_rgb)]
+                st.info(f"Using decorated text overlay (stars + emojis) with background color {bg_color}, font size {fontsize}.")
+                # Create text clip with decorations
+                decorated_clip = create_text_clip(full_script, duration, size=(640,480), fontsize=fontsize, bg_color=bg_rgb, decorate=True)
+                visual_clips = [decorated_clip]
 
         # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
