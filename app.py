@@ -240,35 +240,56 @@ if use_images:
 else:
     st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
+# ========== SCRIPT GENERATION (AI OR MANUAL) ==========
+use_manual_script = st.checkbox("✍️ Use my own script instead of AI‑generated")
+if use_manual_script:
+    manual_script = st.text_area("Paste your custom script below:", height=200)
+    if st.button("Confirm Script and Continue"):
+        if manual_script.strip():
+            script = manual_script.strip()
+            st.success("Using your custom script.")
+            st.text_area("Your Script", script, height=150)
+        else:
+            st.error("Please enter a script.")
+            st.stop()
+else:
+    # AI generation will happen inside the main button logic
+    pass
+
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROQ_API_KEY:
         st.error("Groq API key missing in secrets.")
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script with Groq ----------
-        with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
-            api_url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
-            payload = {
-                "model": "llama-3.1-8b-instant",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.7,
-                "max_tokens": 300
-            }
-            try:
-                response = requests.post(api_url, headers=headers, json=payload, timeout=30)
-                response.raise_for_status()
-                script = response.json()["choices"][0]["message"]["content"]
-                st.success("Script generated!")
-                st.text_area("Generated Script", script, height=150)
-            except Exception as e:
-                st.error(f"Groq API error: {e}")
+        # ---------- 1. Get script (AI or manual) ----------
+        if use_manual_script:
+            if 'script' not in locals() or not script:
+                st.error("Please confirm your custom script first using the 'Confirm Script and Continue' button.")
                 st.stop()
+        else:
+            with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
+                api_url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json"
+                }
+                prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
+                payload = {
+                    "model": "llama-3.1-8b-instant",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": 300
+                }
+                try:
+                    response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+                    response.raise_for_status()
+                    script = response.json()["choices"][0]["message"]["content"]
+                    st.success("Script generated!")
+                    st.text_area("Generated Script", script, height=150)
+                except Exception as e:
+                    st.error(f"Groq API error: {e}")
+                    st.stop()
 
         # ---------- 2. Voiceover with gTTS ----------
         with st.spinner("Generating voiceover using gTTS..."):
