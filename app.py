@@ -34,7 +34,7 @@ if not GROQ_API_KEY:
     st.error("GROK_API_KEY (Groq key) is missing. Please add it to Streamlit secrets.")
     st.stop()
 
-# ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
+# ========== CUSTOM CSS ==========
 st.markdown("""
 <style>
     .stApp {
@@ -156,7 +156,7 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== ROBUST VOICE GENERATION WITH RETRIES (using MoviePy silent fallback) ==========
+# ========== VOICE GENERATION WITH SILENT FALLBACK ==========
 async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -169,7 +169,7 @@ async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
                 await asyncio.sleep(2 ** attempt)
             else:
                 st.error("Voice generation failed after multiple attempts. Using silent audio.")
-                # Create a 5-second silent MP3 using MoviePy (no external dependencies)
+                # Create a 5-second silent MP3 using MoviePy
                 silent_clip = AudioClip(lambda t: 0, duration=5, fps=44100)
                 silent_clip.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
                 silent_clip.close()
@@ -225,7 +225,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover with retries ----------
+        # ---------- 2. Voiceover ----------
         with st.spinner("Generating voiceover (may take a moment)..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
@@ -256,30 +256,69 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
                                         f.write(chunk)
                                 video_clips.append(clip_path)
-                except:
-                    st.warning("Pexels fetch failed. Using fallback.")
+                except Exception as e:
+                    st.warning(f"Pexels fetch failed: {e}. Using fallback.")
             if not video_clips:
                 video_clips = [None]
         else:
             video_clips = [None]
 
-        # ---------- 4. Assemble video ----------
+        # ---------- 4. Assemble video with robust clip handling ----------
         with st.spinner("Assembling video..."):
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
                 st.error("Audio file missing. Aborting.")
                 st.stop()
-            audio_clip = AudioFileClip(output_audio)
+            try:
+                audio_clip = AudioFileClip(output_audio)
+            except Exception as e:
+                st.error(f"Could not load audio file: {e}")
+                st.stop()
             duration = audio_clip.duration
+            if duration <= 0:
+                st.error("Audio duration is zero. Aborting.")
+                st.stop()
+
             clips = []
-            for clip_path in video_clips:
-                if clip_path is None:
+            num_clips = len(video_clips)
+            if num_clips == 0:
+                num_clips = 1  # at least one fallback
+            clip_duration = duration / num_clips if num_clips > 0 else duration
+
+            for i, clip_path in enumerate(video_clips):
+                try:
+                    if clip_path is None:
+                        # Fallback: black screen with text
+                        txt = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
+                        txt = txt.set_duration(clip_duration).set_position('center')
+                        bg = ColorClip(size=(640,480), color=(0,0,0), duration=clip_duration)
+                        clip = CompositeVideoClip([bg, txt])
+                    else:
+                        # Load video clip
+                        vclip = VideoFileClip(clip_path)
+                        if vclip.duration < 0.1:
+                            raise ValueError("Clip too short")
+                        # Take a subclip of appropriate length
+                        sub_end = min(vclip.duration, clip_duration)
+                        if sub_end <= 0:
+                            raise ValueError("Clip duration zero")
+                        vclip = vclip.subclip(0, sub_end)
+                        vclip = vclip.resize((640,480))
+                        # If clip is shorter than needed, loop it? For simplicity, just use as is
+                        clip = vclip
+                    clips.append(clip)
+                except Exception as e:
+                    st.warning(f"Could not process clip {i}: {e}. Using fallback black screen.")
                     txt = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
-                    txt = txt.set_duration(duration/len(video_clips) if video_clips else duration).set_position('center')
-                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=duration/len(video_clips) if video_clips else duration)
+                    txt = txt.set_duration(clip_duration).set_position('center')
+                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=clip_duration)
                     clip = CompositeVideoClip([bg, txt])
-                else:
-                    clip = VideoFileClip(clip_path).subclip(0, duration/len(video_clips)).resize((640,480))
-                clips.append(clip)
+                    clips.append(clip)
+
+            if not clips:
+                st.error("No clips available to assemble.")
+                st.stop()
+
+            # Concatenate all clips
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
