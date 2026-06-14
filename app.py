@@ -2,11 +2,16 @@ import streamlit as st
 import requests
 import tempfile
 import asyncio
-from gtts import gTTS
+import edge_tts
 from moviepy.editor import *
+from moviepy.audio.AudioClip import AudioClip
 from datetime import datetime
 import os
 import pickle
+import time
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import io
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -31,7 +36,7 @@ if not GROQ_API_KEY:
     st.error("GROK_API_KEY (Groq key) is missing. Please add it to Streamlit secrets.")
     st.stop()
 
-# ========== CUSTOM CSS ==========
+# ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
 st.markdown("""
 <style>
     .stApp {
@@ -153,16 +158,66 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== TTS with gTTS (reliable) ==========
-def generate_tts(script, lang_code="en"):
+# ========== ROBUST VOICE GENERATION WITH RETRIES ==========
+async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            comm = edge_tts.Communicate(script, voice)
+            await comm.save(output_path)
+            return True
+        except Exception as e:
+            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+            else:
+                st.error("Voice generation failed after multiple attempts. Using silent audio.")
+                # Create a 5-second silent MP3 using MoviePy (no external dependencies)
+                silent_clip = AudioClip(lambda t: 0, duration=5, fps=44100)
+                silent_clip.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
+                silent_clip.close()
+                return False
+    return False
+
+# ========== TEXT CLIP CREATOR (Pillow-compatible, no ANTIALIAS) ==========
+def create_text_clip(text, duration, size=(640,480), fontsize=24):
+    """
+    Create an ImageClip with black background and white text.
+    Works with Pillow >= 10.0.0 (no ANTIALIAS required).
+    """
+    img = Image.new('RGB', size, color='black')
+    draw = ImageDraw.Draw(img)
+    # Try to load a nicer font, fallback to default
     try:
-        tts = gTTS(text=script, lang=lang_code, slow=False)
-        output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-        tts.save(output_audio)
-        return output_audio
-    except Exception as e:
-        st.error(f"TTS error: {e}")
-        return None
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
+    except:
+        font = ImageFont.load_default()
+    # Wrap text to fit width (leave 20px margin)
+    words = text.split()
+    lines = []
+    current_line = ""
+    for word in words:
+        test_line = current_line + word + " "
+        bbox = draw.textbbox((0, 0), test_line, font=font)
+        if bbox[2] - bbox[0] <= size[0] - 20:
+            current_line = test_line
+        else:
+            lines.append(current_line)
+            current_line = word + " "
+    if current_line:
+        lines.append(current_line)
+    # Calculate vertical position (centered)
+    line_height = fontsize + 6
+    total_height = len(lines) * line_height
+    y = (size[1] - total_height) // 2
+    for line in lines:
+        draw.text((10, y), line, fill='white', font=font)
+        y += line_height
+    # Convert to bytes and create ImageClip
+    img_bytes = io.BytesIO()
+    img.save(img_bytes, format='PNG')
+    img_bytes.seek(0)
+    clip = ImageClip(img_bytes, duration=duration)
+    return clip
 
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
@@ -213,15 +268,17 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Generate voice using gTTS ----------
-        with st.spinner("Generating voiceover..."):
-            output_audio = generate_tts(script, "en")
-            if output_audio is None:
-                st.error("Voice generation failed. Aborting.")
-                st.stop()
-            st.success("Voiceover ready.")
+        # ---------- 2. Voiceover with retries ----------
+        with st.spinner("Generating voiceover (may take a moment)..."):
+            voice = "en-US-JennyNeural"
+            output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
+            if success:
+                st.success("Voiceover ready.")
+            else:
+                st.warning("Using silent audio because voice generation failed.")
 
-        # ---------- 3. Pexels clips ----------
+        # ---------- 3. Fetch stock clips from Pexels ----------
         video_clips = []
         if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
@@ -249,7 +306,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         else:
             video_clips = [None]
 
-        # ---------- 4. Assemble video (without TextClip to avoid PIL issues) ----------
+        # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
                 st.error("Audio file missing. Aborting.")
@@ -257,29 +314,24 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
             clips = []
-            for i, clip_path in enumerate(video_clips):
-                seg_duration = duration / len(video_clips) if video_clips else duration
+            # Determine clip duration per segment
+            num_clips = len(video_clips) if video_clips else 1
+            per_clip_duration = duration / num_clips
+
+            for idx, clip_path in enumerate(video_clips):
                 if clip_path is None:
-                    # Fallback: black screen with no text (to avoid PIL error)
-                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=seg_duration)
-                    clips.append(bg)
+                    # No Pexels clip – create text overlay using custom function
+                    text_to_show = script[:200] if len(script) > 200 else script
+                    clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
                 else:
                     try:
-                        clip = VideoFileClip(clip_path)
-                        # Ensure duration matches segment
-                        if clip.duration > seg_duration:
-                            clip = clip.subclip(0, seg_duration)
-                        else:
-                            clip = clip.loop(duration=seg_duration)
-                        clip = clip.resize((640,480))
-                        clips.append(clip)
+                        clip = VideoFileClip(clip_path).subclip(0, per_clip_duration).resize((640,480))
                     except Exception as e:
-                        st.warning(f"Could not process clip {i}: {e}. Using fallback black screen.")
-                        bg = ColorClip(size=(640,480), color=(0,0,0), duration=seg_duration)
-                        clips.append(bg)
-            if not clips:
-                st.error("No video clips available.")
-                st.stop()
+                        st.warning(f"Could not process clip {idx}: {e}. Using fallback black screen with text.")
+                        text_to_show = script[:200] if len(script) > 200 else script
+                        clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
+                clips.append(clip)
+
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
