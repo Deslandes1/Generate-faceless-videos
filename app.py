@@ -2,14 +2,11 @@ import streamlit as st
 import requests
 import tempfile
 import asyncio
-import edge_tts
+from gtts import gTTS
 from moviepy.editor import *
-from moviepy.audio.AudioClip import AudioClip
 from datetime import datetime
 import os
 import pickle
-import time
-import numpy as np
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -156,25 +153,16 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== VOICE GENERATION WITH SILENT FALLBACK ==========
-async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            comm = edge_tts.Communicate(script, voice)
-            await comm.save(output_path)
-            return True
-        except Exception as e:
-            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
-            else:
-                st.error("Voice generation failed after multiple attempts. Using silent audio.")
-                # Create a 5-second silent MP3 using MoviePy
-                silent_clip = AudioClip(lambda t: 0, duration=5, fps=44100)
-                silent_clip.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
-                silent_clip.close()
-                return False
-    return False
+# ========== TTS with gTTS (reliable) ==========
+def generate_tts(script, lang_code="en"):
+    try:
+        tts = gTTS(text=script, lang=lang_code, slow=False)
+        output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+        tts.save(output_audio)
+        return output_audio
+    except Exception as e:
+        st.error(f"TTS error: {e}")
+        return None
 
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
@@ -225,15 +213,13 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover ----------
-        with st.spinner("Generating voiceover (may take a moment)..."):
-            voice = "en-US-JennyNeural"
-            output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
-            if success:
-                st.success("Voiceover ready.")
-            else:
-                st.warning("Using silent audio because voice generation failed.")
+        # ---------- 2. Generate voice using gTTS ----------
+        with st.spinner("Generating voiceover..."):
+            output_audio = generate_tts(script, "en")
+            if output_audio is None:
+                st.error("Voice generation failed. Aborting.")
+                st.stop()
+            st.success("Voiceover ready.")
 
         # ---------- 3. Pexels clips ----------
         video_clips = []
@@ -256,69 +242,44 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
                                         f.write(chunk)
                                 video_clips.append(clip_path)
-                except Exception as e:
-                    st.warning(f"Pexels fetch failed: {e}. Using fallback.")
+                except:
+                    st.warning("Pexels fetch failed. Using fallback.")
             if not video_clips:
                 video_clips = [None]
         else:
             video_clips = [None]
 
-        # ---------- 4. Assemble video with robust clip handling ----------
+        # ---------- 4. Assemble video (without TextClip to avoid PIL issues) ----------
         with st.spinner("Assembling video..."):
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
                 st.error("Audio file missing. Aborting.")
                 st.stop()
-            try:
-                audio_clip = AudioFileClip(output_audio)
-            except Exception as e:
-                st.error(f"Could not load audio file: {e}")
-                st.stop()
+            audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
-            if duration <= 0:
-                st.error("Audio duration is zero. Aborting.")
-                st.stop()
-
             clips = []
-            num_clips = len(video_clips)
-            if num_clips == 0:
-                num_clips = 1  # at least one fallback
-            clip_duration = duration / num_clips if num_clips > 0 else duration
-
             for i, clip_path in enumerate(video_clips):
-                try:
-                    if clip_path is None:
-                        # Fallback: black screen with text
-                        txt = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
-                        txt = txt.set_duration(clip_duration).set_position('center')
-                        bg = ColorClip(size=(640,480), color=(0,0,0), duration=clip_duration)
-                        clip = CompositeVideoClip([bg, txt])
-                    else:
-                        # Load video clip
-                        vclip = VideoFileClip(clip_path)
-                        if vclip.duration < 0.1:
-                            raise ValueError("Clip too short")
-                        # Take a subclip of appropriate length
-                        sub_end = min(vclip.duration, clip_duration)
-                        if sub_end <= 0:
-                            raise ValueError("Clip duration zero")
-                        vclip = vclip.subclip(0, sub_end)
-                        vclip = vclip.resize((640,480))
-                        # If clip is shorter than needed, loop it? For simplicity, just use as is
-                        clip = vclip
-                    clips.append(clip)
-                except Exception as e:
-                    st.warning(f"Could not process clip {i}: {e}. Using fallback black screen.")
-                    txt = TextClip(script[:100], fontsize=24, color='white', font='Arial', size=(640,480))
-                    txt = txt.set_duration(clip_duration).set_position('center')
-                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=clip_duration)
-                    clip = CompositeVideoClip([bg, txt])
-                    clips.append(clip)
-
+                seg_duration = duration / len(video_clips) if video_clips else duration
+                if clip_path is None:
+                    # Fallback: black screen with no text (to avoid PIL error)
+                    bg = ColorClip(size=(640,480), color=(0,0,0), duration=seg_duration)
+                    clips.append(bg)
+                else:
+                    try:
+                        clip = VideoFileClip(clip_path)
+                        # Ensure duration matches segment
+                        if clip.duration > seg_duration:
+                            clip = clip.subclip(0, seg_duration)
+                        else:
+                            clip = clip.loop(duration=seg_duration)
+                        clip = clip.resize((640,480))
+                        clips.append(clip)
+                    except Exception as e:
+                        st.warning(f"Could not process clip {i}: {e}. Using fallback black screen.")
+                        bg = ColorClip(size=(640,480), color=(0,0,0), duration=seg_duration)
+                        clips.append(bg)
             if not clips:
-                st.error("No clips available to assemble.")
+                st.error("No video clips available.")
                 st.stop()
-
-            # Concatenate all clips
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
