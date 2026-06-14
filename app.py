@@ -1,22 +1,17 @@
 import streamlit as st
 import requests
 import tempfile
-import asyncio
-import edge_tts
-from moviepy.editor import *
-from moviepy.audio.AudioClip import AudioClip
-from datetime import datetime
 import os
 import pickle
-import time
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-import io
+from datetime import datetime
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from moviepy.editor import *
+from gtts import gTTS
+import numpy as np
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -36,7 +31,7 @@ if not GROQ_API_KEY:
     st.error("GROK_API_KEY (Groq key) is missing. Please add it to Streamlit secrets.")
     st.stop()
 
-# ========== CUSTOM CSS (LIGHT BLUE THEME) ==========
+# ========== CUSTOM CSS ==========
 st.markdown("""
 <style>
     .stApp {
@@ -158,40 +153,29 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== ROBUST VOICE GENERATION WITH RETRIES ==========
-async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            comm = edge_tts.Communicate(script, voice)
-            await comm.save(output_path)
-            return True
-        except Exception as e:
-            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
-            else:
-                st.error("Voice generation failed after multiple attempts. Using silent audio.")
-                # Create a 5-second silent MP3 using MoviePy (no external dependencies)
-                silent_clip = AudioClip(lambda t: 0, duration=5, fps=44100)
-                silent_clip.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
-                silent_clip.close()
-                return False
-    return False
+# ========== TEXT-TO-SPEECH using gTTS (no edge-tts) ==========
+def generate_voice_gtts(script, lang_code, output_path):
+    """
+    lang_code: 'en', 'fr', 'es' for gTTS
+    """
+    try:
+        tts = gTTS(text=script, lang=lang_code, slow=False)
+        tts.save(output_path)
+        return True
+    except Exception as e:
+        st.error(f"gTTS error: {e}")
+        return False
 
-# ========== TEXT CLIP CREATOR (Pillow-compatible, no ANTIALIAS) ==========
+# ========== TEXT CLIP CREATOR ==========
 def create_text_clip(text, duration, size=(640,480), fontsize=24):
-    """
-    Create an ImageClip with black background and white text.
-    Works with Pillow >= 10.0.0 (no ANTIALIAS required).
-    """
+    from PIL import Image, ImageDraw, ImageFont
+    import io
     img = Image.new('RGB', size, color='black')
     draw = ImageDraw.Draw(img)
-    # Try to load a nicer font, fallback to default
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
     except:
         font = ImageFont.load_default()
-    # Wrap text to fit width (leave 20px margin)
     words = text.split()
     lines = []
     current_line = ""
@@ -205,14 +189,12 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
             current_line = word + " "
     if current_line:
         lines.append(current_line)
-    # Calculate vertical position (centered)
     line_height = fontsize + 6
     total_height = len(lines) * line_height
     y = (size[1] - total_height) // 2
     for line in lines:
         draw.text((10, y), line, fill='white', font=font)
         y += line_height
-    # Convert to bytes and create ImageClip
     img_bytes = io.BytesIO()
     img.save(img_bytes, format='PNG')
     img_bytes.seek(0)
@@ -235,7 +217,7 @@ niche = st.text_input("Enter your video niche (e.g., motivation, history, techno
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
 youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
-youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and Pexels clips.")
+youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and gTTS voiceover, with stock clips from Pexels.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
@@ -268,15 +250,16 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover with retries ----------
-        with st.spinner("Generating voiceover (may take a moment)..."):
-            voice = "en-US-JennyNeural"
+        # ---------- 2. Voiceover using gTTS ----------
+        with st.spinner("Generating voiceover using Google TTS..."):
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
+            lang_code = "en"  # default; could be extended
+            success = generate_voice_gtts(script, lang_code, output_audio)
             if success:
                 st.success("Voiceover ready.")
             else:
-                st.warning("Using silent audio because voice generation failed.")
+                st.error("Voice generation failed. Cannot proceed.")
+                st.stop()
 
         # ---------- 3. Fetch stock clips from Pexels ----------
         video_clips = []
@@ -299,8 +282,8 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
                                         f.write(chunk)
                                 video_clips.append(clip_path)
-                except:
-                    st.warning("Pexels fetch failed. Using fallback.")
+                except Exception as e:
+                    st.warning(f"Pexels fetch failed: {e}. Using fallback text.")
             if not video_clips:
                 video_clips = [None]
         else:
@@ -313,21 +296,24 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.stop()
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
-            clips = []
-            # Determine clip duration per segment
+            # Determine number of clips
             num_clips = len(video_clips) if video_clips else 1
-            per_clip_duration = duration / num_clips
+            per_clip_duration = max(0.5, duration / num_clips)  # ensure positive
 
+            clips = []
             for idx, clip_path in enumerate(video_clips):
                 if clip_path is None:
-                    # No Pexels clip – create text overlay using custom function
+                    # Text overlay
                     text_to_show = script[:200] if len(script) > 200 else script
                     clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
                 else:
                     try:
-                        clip = VideoFileClip(clip_path).subclip(0, per_clip_duration).resize((640,480))
+                        clip = VideoFileClip(clip_path).subclip(0, per_clip_duration)
+                        if clip.duration < 0.1:
+                            raise ValueError("Clip too short")
+                        clip = clip.resize((640,480))
                     except Exception as e:
-                        st.warning(f"Could not process clip {idx}: {e}. Using fallback black screen with text.")
+                        st.warning(f"Could not process clip {idx}: {e}. Using text overlay.")
                         text_to_show = script[:200] if len(script) > 200 else script
                         clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
                 clips.append(clip)
@@ -335,7 +321,7 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
+            final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac', logger=None, verbose=False)
             st.success("Video assembled.")
             st.video(output_video)
 
