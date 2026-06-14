@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import pickle
 import time
+import numpy as np
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -167,23 +168,26 @@ async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
                 await asyncio.sleep(2 ** attempt)  # exponential backoff
             else:
                 st.error("Voice generation failed after multiple attempts. Using silent audio.")
-                # Create a silent audio file (1 second of silence) as fallback
-                from moviepy.audio.io.AudioFileClip import AudioFileClip
-                # Create a silent clip using numpy
-                import numpy as np
-                from scipy.io import wavfile
-                # Generate silent wav
-                sample_rate = 44100
-                silence = np.zeros(int(sample_rate * 10))  # 10 seconds silence
-                temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                from scipy.io.wavfile import write
-                write(temp_wav, sample_rate, silence.astype(np.int16))
-                # Convert to mp3
-                from moviepy.editor import AudioFileClip
-                silent_clip = AudioFileClip(temp_wav)
-                silent_clip.write_audiofile(output_path, fps=44100, codec='libmp3lame')
-                os.unlink(temp_wav)
-                return False
+                # Create a silent audio file (10 seconds silence) as fallback
+                try:
+                    from scipy.io.wavfile import write
+                    sample_rate = 44100
+                    silence = np.zeros(int(sample_rate * 10), dtype=np.int16)
+                    temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                    write(temp_wav, sample_rate, silence)
+                    silent_clip = AudioFileClip(temp_wav)
+                    silent_clip.write_audiofile(output_path, fps=44100, codec='libmp3lame')
+                    silent_clip.close()
+                    os.unlink(temp_wav)
+                    return False
+                except ImportError:
+                    # If scipy not available, create a simple silent mp3 using moviepy's ColorClip audio (very basic)
+                    from moviepy.audio.io.AudioFileClip import AudioFileClip
+                    from moviepy.audio.fx.all import volumex
+                    # Create a 10-second silent clip by multiplying zero
+                    silent = AudioClip.make_empty(duration=10)
+                    silent.write_audiofile(output_path, fps=44100, codec='libmp3lame')
+                    return False
     return False
 
 # ========== MAIN UI ==========
@@ -235,11 +239,12 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover with retries ----------
+        # ---------- 2. Voiceover with retries (using asyncio.run) ----------
         with st.spinner("Generating voiceover (may take a moment)..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            success = await generate_voice_with_retry(script, voice, output_audio)
+            # Run the async function
+            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
             if success:
                 st.success("Voiceover ready.")
             else:
@@ -275,13 +280,11 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
 
         # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
-            audio_clip = AudioFileClip(output_audio) if os.path.getsize(output_audio) > 0 else None
-            if audio_clip is None:
-                # Create a silent 5-second clip if no audio
-                audio_clip = AudioFileClip(output_audio) if os.path.exists(output_audio) else None
-            if audio_clip is None:
-                st.error("No audio available. Aborting.")
+            # Check if audio file exists and is non-empty
+            if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
+                st.error("Audio file missing. Aborting.")
                 st.stop()
+            audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
             clips = []
             for clip_path in video_clips:
