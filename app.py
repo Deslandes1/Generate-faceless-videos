@@ -216,23 +216,61 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24, bg_color=(0,0,
     clip = ImageClip(img_array, duration=duration)
     return clip
 
-def create_image_clip(image_file, duration, target_size=(640,480)):
-    img = Image.open(image_file).convert('RGB')
-    img.thumbnail(target_size, Image.Resampling.LANCZOS)
-    new_img = Image.new('RGB', target_size, (0,0,0))
-    new_img.paste(img, ((target_size[0]-img.width)//2, (target_size[1]-img.height)//2))
-    img_array = np.array(new_img)
-    clip = ImageClip(img_array, duration=duration)
-    return clip
+def create_image_clip_with_cursor(image_file, duration, cursor_img, cursor_positions, target_size=(640,480)):
+    """
+    Create a video clip from an image. If cursor_img is not None and cursor_positions is a dict
+    of (time_ratio, (x,y)) for that image, we overlay the cursor at the given positions.
+    For simplicity, we will assume the cursor appears at a fixed position for the entire duration
+    of each paragraph segment. Since we call this function per image with the total duration,
+    we need to segment the clip into subclips with different cursor positions.
+    However, to keep it manageable, we'll create a single clip where the cursor appears at a single
+    position (the first coordinate) for the whole image? That won't work.
+    
+    Better: We'll create a composite of the background image and the cursor image placed at the given
+    coordinates for the entire duration. But we need different positions for each paragraph.
+    
+    Actually, we are already splitting the audio per paragraph and creating separate visual clips
+    for each image. But for the first image, we want the same background image but with different
+    cursor positions for each paragraph. Therefore, we should create three separate clips for the first
+    image, each with the cursor at the appropriate coordinates, and then concatenate them.
+    
+    Let's do this: For the first image, instead of creating one long clip, we will create one clip per
+    paragraph of that image, each with the cursor overlay at its assigned coordinates.
+    """
+    # Load the background image and resize
+    bg_img = Image.open(image_file).convert('RGB')
+    bg_img = bg_img.resize(target_size, Image.Resampling.LANCZOS)
+    bg_np = np.array(bg_img)
+    
+    if cursor_img is None or cursor_positions is None:
+        # No cursor, just return a plain ImageClip
+        return ImageClip(bg_np, duration=duration)
+    
+    # Load cursor image (PNG with transparency)
+    cursor_pil = Image.open(cursor_img).convert('RGBA')
+    # Resize cursor to a reasonable size (e.g., 40x40)
+    cursor_pil = cursor_pil.resize((40, 40), Image.Resampling.LANCZOS)
+    cursor_np = np.array(cursor_pil)
+    
+    # For the entire clip, we need to overlay the cursor at the given (x,y) for the whole duration
+    # We'll create a function that returns a frame with the cursor overlaid
+    def make_frame(t):
+        frame = bg_np.copy()
+        # Convert frame to PIL to overlay
+        frame_pil = Image.fromarray(frame)
+        # Paste cursor at (x, y)
+        x, y = cursor_positions
+        frame_pil.paste(cursor_pil, (x, y), cursor_pil)  # using mask
+        return np.array(frame_pil)
+    
+    return VideoClip(make_frame, duration=duration)
 
 # ========== SCRIPT SPLITTER WITH MULTI‑PARAGRAPH PER IMAGE ==========
 def split_script_for_images(script, num_images, paragraphs_per_image):
-    # Split by double newlines (paragraphs)
     paragraphs = [p.strip() for p in script.split('\n\n') if p.strip()]
     total_needed = sum(paragraphs_per_image)
     if len(paragraphs) != total_needed:
         st.warning(f"Script has {len(paragraphs)} paragraphs but you specified {total_needed} paragraphs total. Using as many as available.")
-    # Distribute paragraphs to each image
     image_paragraphs = []
     start = 0
     for i, count in enumerate(paragraphs_per_image):
@@ -283,6 +321,31 @@ if use_images:
         ppi = st.number_input(f"Paragraphs for Image {i+1}", min_value=1, value=3 if i==0 else 1, step=1, key=f"ppi_{i}")
         paragraphs_per_image.append(ppi)
     st.info(f"Total paragraphs needed: {sum(paragraphs_per_image)}. Write your script with exactly that many paragraphs (separated by blank lines).")
+    
+    # Cursor pointer for the first image
+    if num_images >= 1:
+        st.markdown("---")
+        st.subheader("🖱️ Cursor Pointer for First Image")
+        cursor_file = st.file_uploader("Upload a cursor image (PNG with transparency)", type=["png"], key="cursor_upload")
+        if cursor_file:
+            cursor_image = cursor_file
+            st.success("Cursor image uploaded. Now specify coordinates for each paragraph of the first image.")
+            st.info("Coordinates are in pixels on a 640x480 canvas. The top‑left is (0,0).")
+            cursor_coords = []
+            total_para_first = paragraphs_per_image[0]
+            for p in range(total_para_first):
+                col1, col2 = st.columns(2)
+                with col1:
+                    x = st.number_input(f"Paragraph {p+1} - X coordinate", value=320, key=f"x_{p}")
+                with col2:
+                    y = st.number_input(f"Paragraph {p+1} - Y coordinate", value=240, key=f"y_{p}")
+                cursor_coords.append((x, y))
+        else:
+            cursor_image = None
+            cursor_coords = []
+    else:
+        cursor_image = None
+        cursor_coords = []
 else:
     st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
@@ -381,16 +444,25 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                     clip.close()
                 output_audio = final_audio
             
-            # Create video clips: each image gets the total duration of its assigned paragraphs
+            # Create video clips: each image gets multiple clips (one per paragraph)
             visual_clips = []
             audio_idx = 0
             for img_idx, (img_file, para_list) in enumerate(zip(uploaded_images, image_paragraphs)):
-                total_duration = 0
-                for _ in para_list:
-                    total_duration += AudioFileClip(audio_segments[audio_idx]).duration
+                # For the first image, we may have cursor coordinates for each paragraph
+                if img_idx == 0 and cursor_image and cursor_coords and len(cursor_coords) == len(para_list):
+                    use_cursor = True
+                else:
+                    use_cursor = False
+                for para_idx, para in enumerate(para_list):
+                    duration = AudioFileClip(audio_segments[audio_idx]).duration
                     audio_idx += 1
-                clip = create_image_clip(img_file, total_duration, target_size=(640,480))
-                visual_clips.append(clip)
+                    if use_cursor:
+                        coord = cursor_coords[para_idx]
+                        clip = create_image_clip_with_cursor(img_file, duration, cursor_image, coord, target_size=(640,480))
+                    else:
+                        # No cursor (either second image or no cursor uploaded)
+                        clip = create_image_clip_with_cursor(img_file, duration, None, None, target_size=(640,480))
+                    visual_clips.append(clip)
             
         else:
             # Original fallback (single audio, single visual)
