@@ -3,15 +3,23 @@ import requests
 import tempfile
 import asyncio
 import edge_tts
-from moviepy.editor import *
-from moviepy.audio.AudioClip import AudioClip
-from datetime import datetime
 import os
 import pickle
 import time
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
 import io
+from datetime import datetime
+
+# ========== CRITICAL PILLOW ANTIALIAS PATCH ==========
+# Modern Pillow versions (10.0+) removed Image.ANTIALIAS.
+# This injects a fallback attribute before moviepy can call it and crash.
+import PIL.Image
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.Resampling.LANCZOS
+
+from PIL import Image, ImageDraw, ImageFont
+from moviepy.editor import *
+from moviepy.audio.AudioClip import AudioClip
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -158,34 +166,43 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== VOICE GENERATION WITH RETRIES ==========
+# ========== VOICE GENERATION WITH UPDATED COMMUNICATION LAYERS ==========
 async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
     for attempt in range(max_retries):
         try:
-            comm = edge_tts.Communicate(script, voice)
-            await comm.save(output_path)
-            return True
+            # Clean script data strings to prevent parsing execution drops
+            cleaned_script = script.strip().replace("\n", " ")
+            communicate = edge_tts.Communicate(cleaned_script, voice)
+            await communicate.save(output_path)
+            
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return True
         except Exception as e:
             st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 ** attempt)
-            else:
-                st.error("Voice generation failed. Creating silent audio.")
-                silent = AudioClip(lambda t: 0, duration=5, fps=44100)
-                silent.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
-                return False
-    return False
+    
+    # Secure safe-fail matrix if edge-tts blocks execution entirely
+    st.error("Edge-TTS connection rejected. Generating a true structural silent clip.")
+    try:
+        # Create a silent wave clip manually via moviepy to match structural array dimensions
+        silent_audio_clip = AudioClip(lambda t: [0, 0], duration=15, fps=44100)
+        silent_audio_clip.write_audiofile(output_path, fps=44100, codec='libmp3lame', verbose=False, logger=None)
+        return True
+    except Exception as audio_err:
+        st.error(f"Failed to initialize master audio placeholder stream: {audio_err}")
+        return False
 
 # ========== CREATE TEXT CLIP (Pillow-compatible) ==========
 def create_text_clip(text, duration, size=(640,480), fontsize=24):
-    """Create a black clip with white text using Pillow (no ANTIALIAS issue)."""
+    """Create a black clip with white text using Pillow safely."""
     img = Image.new('RGB', size, color='black')
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
     except:
         font = ImageFont.load_default()
-    # Wrap text
+    
     words = text.split()
     lines = []
     current_line = ""
@@ -199,13 +216,14 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
             current_line = word + " "
     if current_line:
         lines.append(current_line)
+        
     line_height = fontsize + 6
     total_height = len(lines) * line_height
     y = (size[1] - total_height) // 2
     for line in lines:
         draw.text((10, y), line, fill='white', font=font)
         y += line_height
-    # Convert PIL to numpy array and create ImageClip
+        
     img_array = np.array(img)
     from moviepy.video.VideoClip import ImageClip
     clip = ImageClip(img_array, duration=duration)
@@ -262,10 +280,9 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
             success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
-            if success:
-                st.success("Voiceover ready.")
-            else:
-                st.warning("Using silent audio.")
+            if not success:
+                st.error("Could not construct audio matrix. Aborting processing flow.")
+                st.stop()
 
         # 3. Pexels clips
         video_clips = []
@@ -290,37 +307,42 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                 video_clips.append(clip_path)
                 except:
                     st.warning("Pexels fetch failed.")
-            if not video_clips:
-                video_clips = [None]
-        else:
+        
+        if not video_clips:
             video_clips = [None]
 
         # 4. Assemble video
         with st.spinner("Assembling video..."):
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
-                st.error("Audio file missing. Aborting.")
+                st.error("Audio file architecture missing. Aborting.")
                 st.stop()
+                
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
             num_clips = len(video_clips)
             per_clip_duration = duration / num_clips if num_clips > 0 else duration
+            
             clips = []
             for idx, clip_path in enumerate(video_clips):
                 if clip_path is None:
-                    # Use text clip
                     clip = create_text_clip(script[:200], duration=per_clip_duration, size=(640,480))
                 else:
                     try:
                         clip = VideoFileClip(clip_path).subclip(0, per_clip_duration).resize((640,480))
                     except Exception as e:
-                        st.warning(f"Clip error: {e}. Using text fallback.")
+                        st.warning(f"Clip processing dropped: {e}. Switching to standard fallback layout.")
                         clip = create_text_clip(script[:200], duration=per_clip_duration, size=(640,480))
                 clips.append(clip)
+                
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
+            
+            # Match strict audio boundaries to eliminate IndexError array slices
+            final_video.duration = duration
+            
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
-            st.success("Video assembled.")
+            st.success("Video successfully compiled!")
             st.video(output_video)
 
         # 5. Upload to YouTube
