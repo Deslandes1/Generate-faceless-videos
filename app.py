@@ -1,13 +1,17 @@
 import streamlit as st
 import requests
 import tempfile
+import asyncio
+import edge_tts
+from moviepy.editor import *
+from moviepy.audio.AudioClip import AudioClip
+from datetime import datetime
 import os
 import pickle
+import time
 import numpy as np
-from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
-from moviepy.editor import *
-from gtts import gTTS
+import io
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -23,6 +27,7 @@ st.set_page_config(
 
 # ========== LOAD API KEYS ==========
 GROQ_API_KEY = st.secrets.get("GROK_API_KEY", "")
+PEXELS_API_KEY = st.secrets.get("PEXELS_API_KEY", "")
 YOUTUBE_CLIENT_ID = st.secrets.get("YOUTUBE_CLIENT_ID", "")
 YOUTUBE_CLIENT_SECRET = st.secrets.get("YOUTUBE_CLIENT_SECRET", "")
 REDIRECT_URI = st.secrets.get("REDIRECT_URI", "https://your-app.streamlit.app")
@@ -34,13 +39,45 @@ if not GROQ_API_KEY:
 # ========== CUSTOM CSS ==========
 st.markdown("""
 <style>
-    .stApp { background: linear-gradient(135deg, #e0f0ff 0%, #b8d9ff 100%); color: #1a2a3a; }
-    .big-title { font-size: 3rem; font-weight: bold; color: #1e3c72; margin-bottom: 0.2rem; }
-    .subtitle { font-size: 1.2rem; color: #2a4a7a; margin-bottom: 1rem; }
-    .stButton>button { background-color: #2c7be5; color: white; border-radius: 30px; font-weight: bold; width: 100%; }
-    .stButton>button:hover { background-color: #1a5bbf; }
-    .security-badge { background: white; border: 1px solid #2c7be5; border-radius: 30px; padding: 8px 15px; text-align: center; color: #1e3c72; font-weight: bold; }
-    [data-testid="stSidebar"] { background-color: #cce4ff !important; }
+    .stApp {
+        background: linear-gradient(135deg, #e0f0ff 0%, #b8d9ff 100%);
+        color: #1a2a3a;
+    }
+    .big-title {
+        font-size: 3rem;
+        font-weight: bold;
+        color: #1e3c72;
+        margin-bottom: 0.2rem;
+    }
+    .subtitle {
+        font-size: 1.2rem;
+        color: #2a4a7a;
+        margin-bottom: 1rem;
+    }
+    .stButton>button {
+        background-color: #2c7be5;
+        color: white;
+        border-radius: 30px;
+        font-weight: bold;
+        width: 100%;
+    }
+    .stButton>button:hover {
+        background-color: #1a5bbf;
+    }
+    .security-badge {
+        background: white;
+        border: 1px solid #2c7be5;
+        border-radius: 30px;
+        padding: 8px 15px;
+        margin: 10px 0;
+        text-align: center;
+        color: #1e3c72;
+        font-weight: bold;
+        font-family: monospace;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #cce4ff !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -121,7 +158,26 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== CREATE TEXT CLIP (Pillow 10 compatible) ==========
+# ========== VOICE GENERATION WITH RETRIES ==========
+async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            comm = edge_tts.Communicate(script, voice)
+            await comm.save(output_path)
+            return True
+        except Exception as e:
+            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+            else:
+                st.error("Voice generation failed. Creating silent audio.")
+                silent = AudioClip(lambda t: 0, duration=5, fps=44100)
+                silent.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
+                silent.close()
+                return False
+    return False
+
+# ========== CREATE TEXT CLIP (for fallback) ==========
 def create_text_clip(text, duration, size=(640,480), fontsize=24):
     img = Image.new('RGB', size, color='black')
     draw = ImageDraw.Draw(img)
@@ -129,7 +185,6 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
     except:
         font = ImageFont.load_default()
-    # Wrap text
     words = text.split()
     lines = []
     current_line = ""
@@ -153,6 +208,18 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
     clip = ImageClip(img_array, duration=duration)
     return clip
 
+# ========== CREATE IMAGE CLIP FROM UPLOADED FILE ==========
+def create_image_clip(image_file, duration, target_size=(640,480)):
+    # Load image and convert to RGB
+    img = Image.open(image_file).convert('RGB')
+    # Resize to fit target size (maintain aspect ratio, add black bars)
+    img.thumbnail(target_size, Image.Resampling.LANCZOS)
+    new_img = Image.new('RGB', target_size, (0,0,0))
+    new_img.paste(img, ((target_size[0]-img.width)//2, (target_size[1]-img.height)//2))
+    img_array = np.array(new_img)
+    clip = ImageClip(img_array, duration=duration)
+    return clip
+
 # ========== MAIN UI ==========
 col1, col2 = st.columns([4, 1])
 with col1:
@@ -169,8 +236,22 @@ niche = st.text_input("Enter your video niche (e.g., motivation, history, techno
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
 youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
-youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and gTTS voice. Text overlay by GlobalInternet.py.")
+youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and Pexels clips.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
+
+# ---------- Image upload section ----------
+st.markdown("---")
+st.subheader("📸 Use Your Own Images (Slideshow)")
+uploaded_images = st.file_uploader(
+    "Upload images (PNG, JPG) – they will be displayed in order while the AI explains",
+    type=["png", "jpg", "jpeg"],
+    accept_multiple_files=True
+)
+use_images = uploaded_images and len(uploaded_images) > 0
+if use_images:
+    st.success(f"{len(uploaded_images)} images uploaded. They will form a slideshow.")
+else:
+    st.info("No images uploaded. Will use stock video clips from Pexels (or text fallback).")
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     if not GROQ_API_KEY:
@@ -179,9 +260,12 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         st.error("YouTube OAuth credentials missing.")
     else:
         # ---------- 1. Generate script with Groq ----------
-        with st.spinner("Generating script using Groq AI..."):
+        with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
             api_url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
                 "model": "llama-3.1-8b-instant",
@@ -199,45 +283,95 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Generate voice using gTTS (no 403 errors) ----------
-        with st.spinner("Generating voice using gTTS..."):
+        # ---------- 2. Voiceover with retries ----------
+        with st.spinner("Generating voiceover (may take a moment)..."):
+            voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            try:
-                # gTTS supports English, French, Spanish. Map language.
-                lang_map = {"English": "en", "French": "fr", "Spanish": "es"}
-                tts = gTTS(text=script, lang=lang_map.get(style, "en"), slow=False)
-                tts.save(output_audio)
+            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
+            if success:
                 st.success("Voiceover ready.")
-                voice_success = True
-            except Exception as e:
-                st.warning(f"gTTS failed: {e}. Creating silent audio.")
-                # silent audio
-                silent = AudioClip(lambda t: 0, duration=10, fps=44100)
-                silent.write_audiofile(output_audio, codec='libmp3lame', verbose=False, logger=None)
-                silent.close()
-                voice_success = False
+            else:
+                st.warning("Using silent audio because voice generation failed.")
 
-        # ---------- 3. Create video clips (black with text overlay) ----------
-        with st.spinner("Creating video..."):
-            audio_clip = AudioFileClip(output_audio)
-            duration = audio_clip.duration
-            # Split script into 3 segments for variation
-            script_parts = [script[:len(script)//3], script[len(script)//3:2*len(script)//3], script[2*len(script)//3:]]
-            per_clip_duration = duration / 3
-            clips = []
-            for i, part in enumerate(script_parts):
-                if not part.strip():
-                    part = script[:100]
-                clip = create_text_clip(part, duration=per_clip_duration, size=(640,480), fontsize=24)
-                clips.append(clip)
-            final_video = concatenate_videoclips(clips, method="compose")
+        # ---------- 3. Prepare visual clips (images OR Pexels OR text) ----------
+        visual_clips = []
+        if use_images:
+            with st.spinner("Processing uploaded images..."):
+                # Each image gets equal portion of audio duration
+                audio_clip = AudioFileClip(output_audio)
+                duration = audio_clip.duration
+                per_image_duration = duration / len(uploaded_images)
+                for img_file in uploaded_images:
+                    try:
+                        clip = create_image_clip(img_file, per_image_duration, target_size=(640,480))
+                        visual_clips.append(clip)
+                    except Exception as e:
+                        st.warning(f"Could not process image: {e}")
+                if not visual_clips:
+                    st.error("No valid images. Falling back to stock clips.")
+                    use_images = False
+        if not use_images:
+            # Fallback: Pexels video clips or text
+            if PEXELS_API_KEY:
+                with st.spinner("Fetching stock clips from Pexels..."):
+                    headers_pex = {"Authorization": PEXELS_API_KEY}
+                    keywords = niche.split()[:3]
+                    search_term = " ".join(keywords)
+                    url = f"https://api.pexels.com/videos/search?query={search_term}&per_page=3"
+                    try:
+                        resp = requests.get(url, headers=headers_pex, timeout=10)
+                        if resp.status_code == 200:
+                            for video in resp.json().get("videos", []):
+                                video_files = video.get("video_files", [])
+                                if video_files:
+                                    clip_url = video_files[0]["link"]
+                                    clip_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+                                    clip_resp = requests.get(clip_url, stream=True)
+                                    with open(clip_path, "wb") as f:
+                                        for chunk in clip_resp.iter_content(chunk_size=8192):
+                                            f.write(chunk)
+                                    visual_clips.append(clip_path)  # store path for later
+                    except:
+                        st.warning("Pexels fetch failed.")
+            if visual_clips:
+                # Use Pexels video files
+                audio_clip = AudioFileClip(output_audio)
+                duration = audio_clip.duration
+                per_clip_duration = duration / len(visual_clips)
+                video_clips = []
+                for idx, path in enumerate(visual_clips):
+                    try:
+                        clip = VideoFileClip(path).subclip(0, per_clip_duration).resize((640,480))
+                        video_clips.append(clip)
+                    except Exception as e:
+                        st.warning(f"Could not process clip {idx}: {e}")
+                visual_clips = video_clips
+            else:
+                # Final fallback: text overlay
+                audio_clip = AudioFileClip(output_audio)
+                duration = audio_clip.duration
+                text_to_show = script[:200] if len(script) > 200 else script
+                visual_clips = [create_text_clip(text_to_show, duration, size=(640,480), fontsize=24)]
+
+        # ---------- 4. Assemble video ----------
+        with st.spinner("Assembling video..."):
+            if not visual_clips:
+                st.error("No visual clips available. Aborting.")
+                st.stop()
+            # Ensure audio is loaded
+            audio_clip = AudioFileClip(output_audio) if 'audio_clip' not in locals() else audio_clip
+            if not audio_clip:
+                st.error("Audio clip missing. Aborting.")
+                st.stop()
+            # Concatenate all visual clips
+            final_video = concatenate_videoclips(visual_clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
             final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
             st.success("Video assembled.")
             st.video(output_video)
 
-        # ---------- 4. Upload to YouTube ----------
+        # ---------- 5. Upload to YouTube ----------
         if auto_post:
             with st.spinner("Uploading to YouTube..."):
                 try:
@@ -249,6 +383,6 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         else:
             st.info("Auto‑upload disabled. Download video below.")
 
-        # ---------- 5. Download button ----------
+        # ---------- 6. Download button ----------
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
