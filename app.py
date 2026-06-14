@@ -4,6 +4,7 @@ import tempfile
 import asyncio
 import edge_tts
 from moviepy.editor import *
+from moviepy.audio.AudioClip import AudioClip
 from datetime import datetime
 import os
 import pickle
@@ -155,7 +156,7 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== ROBUST VOICE GENERATION WITH RETRIES ==========
+# ========== ROBUST VOICE GENERATION WITH RETRIES (using MoviePy silent fallback) ==========
 async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -165,29 +166,14 @@ async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
         except Exception as e:
             st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
             if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)  # exponential backoff
+                await asyncio.sleep(2 ** attempt)
             else:
                 st.error("Voice generation failed after multiple attempts. Using silent audio.")
-                # Create a silent audio file (10 seconds silence) as fallback
-                try:
-                    from scipy.io.wavfile import write
-                    sample_rate = 44100
-                    silence = np.zeros(int(sample_rate * 10), dtype=np.int16)
-                    temp_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                    write(temp_wav, sample_rate, silence)
-                    silent_clip = AudioFileClip(temp_wav)
-                    silent_clip.write_audiofile(output_path, fps=44100, codec='libmp3lame')
-                    silent_clip.close()
-                    os.unlink(temp_wav)
-                    return False
-                except ImportError:
-                    # If scipy not available, create a simple silent mp3 using moviepy's ColorClip audio (very basic)
-                    from moviepy.audio.io.AudioFileClip import AudioFileClip
-                    from moviepy.audio.fx.all import volumex
-                    # Create a 10-second silent clip by multiplying zero
-                    silent = AudioClip.make_empty(duration=10)
-                    silent.write_audiofile(output_path, fps=44100, codec='libmp3lame')
-                    return False
+                # Create a 5-second silent MP3 using MoviePy (no external dependencies)
+                silent_clip = AudioClip(lambda t: 0, duration=5, fps=44100)
+                silent_clip.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
+                silent_clip.close()
+                return False
     return False
 
 # ========== MAIN UI ==========
@@ -239,11 +225,10 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover with retries (using asyncio.run) ----------
+        # ---------- 2. Voiceover with retries ----------
         with st.spinner("Generating voiceover (may take a moment)..."):
             voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            # Run the async function
             success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
             if success:
                 st.success("Voiceover ready.")
@@ -280,7 +265,6 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
 
         # ---------- 4. Assemble video ----------
         with st.spinner("Assembling video..."):
-            # Check if audio file exists and is non-empty
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
                 st.error("Audio file missing. Aborting.")
                 st.stop()
