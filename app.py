@@ -1,17 +1,22 @@
 import streamlit as st
 import requests
 import tempfile
+import asyncio
+import edge_tts
+from moviepy.editor import *
+from moviepy.audio.AudioClip import AudioClip
+from datetime import datetime
 import os
 import pickle
-from datetime import datetime
+import time
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+import io
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from moviepy.editor import *
-from gtts import gTTS
-import numpy as np
 
 # ========== PAGE CONFIG ==========
 st.set_page_config(
@@ -153,35 +158,40 @@ def upload_to_youtube(video_path, title, description, category_id="22", privacy_
     response = request.execute()
     return response
 
-# ========== TEXT-TO-SPEECH using gTTS (no edge-tts) ==========
-def generate_voice_gtts(script, lang_code, output_path):
-    """
-    lang_code: 'en', 'fr', 'es' for gTTS
-    """
-    try:
-        tts = gTTS(text=script, lang=lang_code, slow=False)
-        tts.save(output_path)
-        return True
-    except Exception as e:
-        st.error(f"gTTS error: {e}")
-        return False
+# ========== VOICE GENERATION WITH RETRIES ==========
+async def generate_voice_with_retry(script, voice, output_path, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            comm = edge_tts.Communicate(script, voice)
+            await comm.save(output_path)
+            return True
+        except Exception as e:
+            st.warning(f"Voice generation attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+            else:
+                st.error("Voice generation failed. Creating silent audio.")
+                silent = AudioClip(lambda t: 0, duration=5, fps=44100)
+                silent.write_audiofile(output_path, codec='libmp3lame', verbose=False, logger=None)
+                return False
+    return False
 
-# ========== TEXT CLIP CREATOR ==========
+# ========== CREATE TEXT CLIP (Pillow-compatible) ==========
 def create_text_clip(text, duration, size=(640,480), fontsize=24):
-    from PIL import Image, ImageDraw, ImageFont
-    import io
+    """Create a black clip with white text using Pillow (no ANTIALIAS issue)."""
     img = Image.new('RGB', size, color='black')
     draw = ImageDraw.Draw(img)
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", fontsize)
     except:
         font = ImageFont.load_default()
+    # Wrap text
     words = text.split()
     lines = []
     current_line = ""
     for word in words:
         test_line = current_line + word + " "
-        bbox = draw.textbbox((0, 0), test_line, font=font)
+        bbox = draw.textbbox((0,0), test_line, font=font)
         if bbox[2] - bbox[0] <= size[0] - 20:
             current_line = test_line
         else:
@@ -195,10 +205,10 @@ def create_text_clip(text, duration, size=(640,480), fontsize=24):
     for line in lines:
         draw.text((10, y), line, fill='white', font=font)
         y += line_height
-    img_bytes = io.BytesIO()
-    img.save(img_bytes, format='PNG')
-    img_bytes.seek(0)
-    clip = ImageClip(img_bytes, duration=duration)
+    # Convert PIL to numpy array and create ImageClip
+    img_array = np.array(img)
+    from moviepy.video.VideoClip import ImageClip
+    clip = ImageClip(img_array, duration=duration)
     return clip
 
 # ========== MAIN UI ==========
@@ -217,7 +227,7 @@ niche = st.text_input("Enter your video niche (e.g., motivation, history, techno
 style = st.selectbox("Choose video style", ["Dynamic", "Calm", "Inspirational", "Educational"])
 auto_post = st.checkbox("Auto‑post to YouTube (requires OAuth)")
 youtube_title = st.text_input("YouTube Video Title", value=f"Faceless Video - {datetime.now().strftime('%Y%m%d')}")
-youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and gTTS voiceover, with stock clips from Pexels.")
+youtube_description = st.text_area("YouTube Video Description", value="Generated automatically by Groq AI and Pexels clips.")
 privacy = st.selectbox("YouTube Privacy Status", ["public", "unlisted", "private"])
 
 if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
@@ -226,13 +236,10 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
     elif auto_post and (not YOUTUBE_CLIENT_ID or not YOUTUBE_CLIENT_SECRET):
         st.error("YouTube OAuth credentials missing.")
     else:
-        # ---------- 1. Generate script with Groq ----------
-        with st.spinner("Generating script using Groq AI (Llama 3.1)..."):
+        # 1. Generate script
+        with st.spinner("Generating script using Groq AI..."):
             api_url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
             prompt = f"Write a short, engaging script for a faceless video in the {niche} niche. Style: {style}. Keep it under 200 words."
             payload = {
                 "model": "llama-3.1-8b-instant",
@@ -250,18 +257,17 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                 st.error(f"Groq API error: {e}")
                 st.stop()
 
-        # ---------- 2. Voiceover using gTTS ----------
-        with st.spinner("Generating voiceover using Google TTS..."):
+        # 2. Voiceover
+        with st.spinner("Generating voiceover..."):
+            voice = "en-US-JennyNeural"
             output_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            lang_code = "en"  # default; could be extended
-            success = generate_voice_gtts(script, lang_code, output_audio)
+            success = asyncio.run(generate_voice_with_retry(script, voice, output_audio))
             if success:
                 st.success("Voiceover ready.")
             else:
-                st.error("Voice generation failed. Cannot proceed.")
-                st.stop()
+                st.warning("Using silent audio.")
 
-        # ---------- 3. Fetch stock clips from Pexels ----------
+        # 3. Pexels clips
         video_clips = []
         if PEXELS_API_KEY:
             with st.spinner("Fetching stock clips from Pexels..."):
@@ -282,50 +288,42 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
                                     for chunk in clip_resp.iter_content(chunk_size=8192):
                                         f.write(chunk)
                                 video_clips.append(clip_path)
-                except Exception as e:
-                    st.warning(f"Pexels fetch failed: {e}. Using fallback text.")
+                except:
+                    st.warning("Pexels fetch failed.")
             if not video_clips:
                 video_clips = [None]
         else:
             video_clips = [None]
 
-        # ---------- 4. Assemble video ----------
+        # 4. Assemble video
         with st.spinner("Assembling video..."):
             if not os.path.exists(output_audio) or os.path.getsize(output_audio) == 0:
                 st.error("Audio file missing. Aborting.")
                 st.stop()
             audio_clip = AudioFileClip(output_audio)
             duration = audio_clip.duration
-            # Determine number of clips
-            num_clips = len(video_clips) if video_clips else 1
-            per_clip_duration = max(0.5, duration / num_clips)  # ensure positive
-
+            num_clips = len(video_clips)
+            per_clip_duration = duration / num_clips if num_clips > 0 else duration
             clips = []
             for idx, clip_path in enumerate(video_clips):
                 if clip_path is None:
-                    # Text overlay
-                    text_to_show = script[:200] if len(script) > 200 else script
-                    clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
+                    # Use text clip
+                    clip = create_text_clip(script[:200], duration=per_clip_duration, size=(640,480))
                 else:
                     try:
-                        clip = VideoFileClip(clip_path).subclip(0, per_clip_duration)
-                        if clip.duration < 0.1:
-                            raise ValueError("Clip too short")
-                        clip = clip.resize((640,480))
+                        clip = VideoFileClip(clip_path).subclip(0, per_clip_duration).resize((640,480))
                     except Exception as e:
-                        st.warning(f"Could not process clip {idx}: {e}. Using text overlay.")
-                        text_to_show = script[:200] if len(script) > 200 else script
-                        clip = create_text_clip(text_to_show, duration=per_clip_duration, size=(640,480), fontsize=24)
+                        st.warning(f"Clip error: {e}. Using text fallback.")
+                        clip = create_text_clip(script[:200], duration=per_clip_duration, size=(640,480))
                 clips.append(clip)
-
             final_video = concatenate_videoclips(clips, method="compose")
             final_video = final_video.set_audio(audio_clip)
             output_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
-            final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac', logger=None, verbose=False)
+            final_video.write_videofile(output_video, fps=24, codec='libx264', audio_codec='aac')
             st.success("Video assembled.")
             st.video(output_video)
 
-        # ---------- 5. Upload to YouTube ----------
+        # 5. Upload to YouTube
         if auto_post:
             with st.spinner("Uploading to YouTube..."):
                 try:
@@ -337,6 +335,6 @@ if st.button("🚀 Generate & Upload to YouTube", use_container_width=True):
         else:
             st.info("Auto‑upload disabled. Download video below.")
 
-        # ---------- 6. Download button ----------
+        # 6. Download button
         with open(output_video, "rb") as f:
             st.download_button("📥 Download Video", f, file_name=f"faceless_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4")
